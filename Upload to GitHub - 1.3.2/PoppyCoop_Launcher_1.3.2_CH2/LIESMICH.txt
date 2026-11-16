@@ -1,0 +1,44 @@
+POPPY PLAYTIME CO-OP - LAUNCHER 1.3.2 (mit Chapter 2)
+=====================================================
+
+Inoffizielle Version des PoppyCoop-Launchers 2.0 (Fan-Mod, nicht von Mob Entertainment).
+Neu gegenüber dem Original:
+- Chapter 2 ist im Launcher spielbar (Beta).
+- Echte Spielerfiguren in Chapter 2: Ganzkörperfigur mit GrabPack (Rucksack, Werfer, Hände),
+  Animationen für Stehen, Gehen, Rennen, Ducken, Springen; abgeschossene Hände fliegen mit
+  schwarzem Kabel dorthin, wo der Mitspieler hinschießt; grüne Hand ist an der Figur grün.
+- Grüne Hand wird geteilt: Hat einer sie, bekommen alle sie.
+- Türen, Bodenluken, Hebel, Kran-Griffe, Lüftungsgitter, Spinnennetze, Holzwände, Pappfiguren,
+  Wagen usw. bewegen sich beim Mitspieler genau mit und bleiben nach dem Neuladen so.
+- Rätselteile (Ofentüren, Zahnräder, Formen, Farbkartuschen, Garagenhebel) werden geteilt.
+- Strom, Schalter, Schlüssel, Gegenstände und Checkpoints werden geteilt
+  ("Load Game" bringt jeden zum weitesten Checkpoint).
+- F6: zum Mitspieler teleportieren (wenn einer feststeckt oder weit zurück ist).
+- Absturz beim Neuladen eines Checkpoints behoben.
+- Launcher läuft deutlich flüssiger.
+
+Installation (Windows)
+----------------------
+1. ZIP entpacken, PoppyCoopLauncher.exe starten.
+   Windows meldet evtl. "Der Computer wurde durch Windows geschützt" (die EXE ist nicht signiert):
+   "Weitere Informationen" -> "Trotzdem ausführen".
+2. Beim ersten Start: Spielordner wählen, Name und Farbe einstellen, Mod installieren.
+   Chapter 2: links "Chapter 2" anklicken. Den Ordner findet der Launcher meist selbst, sonst
+   Steam -> Rechtsklick "Poppy Playtime - Chapter 2" -> Verwalten -> Lokale Dateien durchsuchen.
+3. Wer eine ältere Version schon benutzt hat: einfach diesen starten und PLAY drücken,
+   der Mod wird automatisch auf 1.3.2 aktualisiert.
+
+Zusammen spielen
+----------------
+- Einer drückt "Create Game" und schickt den Raumcode, der andere "Join Game" und gibt ihn ein.
+- Beide laden im Spiel DENSELBEN Checkpoint (Play -> Load Game).
+- Beide brauchen diese Launcher-Version (1.3.2), sonst passen die Mods nicht zusammen.
+- Firewall-Frage zu PoppyCoopNet.exe: "Zulassen".
+- F6 = zum Mitspieler teleportieren.
+- Im Spiel F10 und "coop_status" eintippen zeigt Raum und Mitspieler.
+
+Tasten aendern
+--------------
+Die Tasten stehen in ...\Binaries\Win64\ue4ss\Mods\PoppyCoop\keybinds.txt (wird beim ersten
+Spielen angelegt). Taste aendern, speichern, Spiel neu starten. Standard:
+teleport=F6  buddy=F7  record=O  play=P   (F8/F9 bleiben frei fuer andere Mods)
