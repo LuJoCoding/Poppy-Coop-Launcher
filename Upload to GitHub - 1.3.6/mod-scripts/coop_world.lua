@@ -301,10 +301,13 @@ find_actor = function(path)
         if valid(o) then return o end
         return nil
     end
-    local c = ChildCache[path]
-    if c and valid(c) then return c end
+    -- the parent is looked up fresh every time; a cached child is only used while it belongs to the
+    -- very same parent object (levels stream out and back in: a stale child must never be touched)
     local parent = try(StaticFindObject, parent_path)
     if not valid(parent) then return nil end
+    local paddr = try(function() return parent:GetAddress() end)
+    local c = ChildCache[path]
+    if c and c.paddr == paddr then return c.a end
     local found
     pcall(function()
         local cls = StaticFindObject("/Script/Engine.ChildActorComponent")
@@ -318,7 +321,7 @@ find_actor = function(path)
             end
         end
     end)
-    ChildCache[path] = found
+    ChildCache[path] = found and { a = found, paddr = paddr } or nil
     return found
 end
 
@@ -643,10 +646,15 @@ for _, f in ipairs(ACT_FNS) do ACT_SET[f] = true end
 -- single CoopOpenDoor event (replaying DoorOpen/Remove3DItem alone does not swing the door, and replaying
 -- Remove3DItem took the other player's key away).
 local DOOR_FNS = { "DoorInteraction", "DoorOpen", "Force Door Open", "Force Interact", "Force ParentInteraction",
-    "On Door Interact Door", "On Door Interact Left", "Remove3DItemFromPlayerInventory", "On Interact" }
+    "On Door Interact Door", "On Door Interact Left", "Remove3DItemFromPlayerInventory", "On Interact",
+    -- Chapter 1 doors
+    "Event Open Door", "UnlockAndOpenDoor", "Force Open Door", "Open Left Door Event", "Open Right Door Event" }
 local DOOR_SET = {}
 for _, f in ipairs(DOOR_FNS) do DOOR_SET[f] = true end
-local function is_door_class(cname) return cname:find("/DoorBP%.") or cname:find("/DoorChildBP%.") end
+local function is_door_class(cname)
+    return cname:find("/DoorBP%.") or cname:find("/DoorChildBP%.")                     -- Chapter 2
+        or cname:find("/DoubleDoors%.") or cname:find("/SingleDoors_BP%.")             -- Chapter 1
+end
 -- Chapter 2 puzzle pieces: when a player does this locally, the other games run the object's own
 -- "force" function (the puzzle step completes there without needing the item/hands).
 local REMAP = {
@@ -658,6 +666,9 @@ local REMAP = {
     Paint_CartridgeSlot_C = { ["Send Cartridge"] = "Force Insert Cartridge" },
     GarageLever_C = { ["Pull Down"] = "ForcePullDown" },
     BP_MoveableCart_C = { SmashBoards = "SmashBoards", SnapToPlace = "SnapToPlace" },
+    -- Chapter 1
+    SecurityPadInteractionBP_C = { OpenDoors = "Force Correct Code" },
+    LeftHandAccessPad_C = { ["Activate Blueprints"] = "Force Complete" },
 }
 local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
@@ -741,6 +752,7 @@ local Hot, HotCount, HotSec = {}, {}, -1
 local DISCOVER = Config.discover == true or Config.discover == "true"
 local function on_local_call(cname, fnname, ctx, ...)
     local hk = cname .. ":" .. fnname
+    if P.crumb then P.crumb("hook " .. hk:match("([^/]+)$")) end
     local pf = P.Perf
     if pf then pf.hooks = pf.hooks + 1; pf.by[hk] = (pf.by[hk] or 0) + 1 end
     if Hot[hk] then return end
@@ -797,7 +809,9 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     if COMP_INV_SET[fnname] then
         -- runs on a component of OUR player: "...PlayerBP_C_2147482413.PlayerInventoryComponent"
-        local pp = fullpath(pawn())
+        -- the component's owner, looked up fresh: this can fire while a level loads (inventory restored
+        -- from the save), when the cached pawn may already be freed
+        local pp = fullpath(try(function() return obj:GetOwner() end))
         local sub = pp and path:sub(1, #pp + 1) == pp .. "." and path:sub(#pp + 2) or path:match("PlayerBP[%w_]*%.(.+)$")
         if not SYNC_INV or not sub then return end
         if not args then log("inventory %s not shareable: %s", fnname, tostring(why)); return end
@@ -1266,21 +1280,24 @@ local diag_done = false
 table.insert(P.Handlers.restart, function() scan_classes() end)
 
 table.insert(P.Handlers.tick, function(dt, have)
+    local crumb = P.crumb or function() end
     if not have or not pawn() then return end
     local now = P.game_time()
     if now - t_scan > 2 then
         t_scan = now
+        crumb("world: count levels")
         local lv = #(FindAllOf("Level") or {})
         if lv ~= last_level_objs then
             last_level_objs = lv
-            scan_classes()
-            retry_pending()
-            report_levels(true)
+            crumb("world: scan_classes"); scan_classes()
+            crumb("world: retry_pending"); retry_pending()
+            crumb("world: report_levels"); report_levels(true)
         end
     end
-    if now - t_levels > 1 then t_levels = now; sync_levels(); pcall(cp_fix_tick) end
-    if now - t_hands > 0.5 then t_hands = now; check_hands(); pcall(check_rhand); check_watch() end
-    if not diag_done and now > 20 then diag_done = true; diagnostics(false) end
+    if now - t_levels > 1 then t_levels = now; crumb("world: sync_levels"); sync_levels(); crumb("world: cp_fix"); pcall(cp_fix_tick) end
+    if now - t_hands > 0.5 then t_hands = now; crumb("world: check_hands"); check_hands(); crumb("world: check_rhand"); pcall(check_rhand); crumb("world: check_watch"); check_watch() end
+    if not diag_done and now > 20 then diag_done = true; crumb("world: diagnostics"); diagnostics(false) end
+    crumb("world: done")
 end)
 
 RegisterConsoleCommandHandler("coop_diag", function(_, _, out)

@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **`PoppyCoop_Launcher_x.x.x_CH2.zip`** from this repository (or from Releases), unzip it,
+Download **`PoppyCoop_Launcher_1.3.6.zip`** from this folder (or from Releases), unzip it,
 and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -39,8 +39,12 @@ You can change these keys in `ue4ss/Mods/PoppyCoop/keybinds.txt` (created the fi
 
 ## What's shared
 
-**Chapter 1:** players (position, animations, GrabPack hands), doors, buttons, power, puzzles, picked-up items,
-inventory, checkpoints, deaths and which parts of the factory are loaded.
+**Chapter 1:** player figures - a faceless mannequin with a round head in your colour (walk, run, crouch, jump,
+lying down when dead) carrying the real Chapter 1 GrabPack (shown once that player has it); launched hands are
+the real game hands with the same angle and grab state (holding on = closed hand) and a black cable; doors
+(real swing), buttons, power, code and hand pads, puzzles, picked-up items, inventory, checkpoints, deaths;
+boxes, toy blocks, chairs and other physics props (while moved and where they were left); the pull platforms
+in the factory; which parts of the factory are loaded.
 
 **Chapter 2 (beta):** full player figures with GrabPack and animations; launched hands with cable; the green hand
 (if one player has it, everyone gets it); doors, floor hatches, levers, crane handles, vents, spider webs,
@@ -69,9 +73,35 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
   - `dev_exec_on.txt`: deep dumps (`dump_now.txt`) and running Lua from `exec_now.txt`.
   - `perf_on.txt`: performance report every 15 s (`perf_<name>.txt`).
   - `trace_on.txt`: log of every hooked call (slow).
+  - `crumbs_on.txt`: writes the last block the mod entered to `crumb_<name>.txt` (to find freezes).
+- Chapter 1: never call animation functions (PlayAnimation, SetAnimationMode, GetPosition, GetSocketLocation on
+  an animated mesh) from the player tick - they wait for the engine's parallel animation tasks, which need
+  UE4SS's lock -> the game freezes. Queue them with `late()` (runs in the crosshair widget's Tick).
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.3.6
+- **Chapter 1 player figure:** mannequin with a round head (like the game's player model), jointed arms and legs,
+  walk/run/crouch/jump/dead poses, in your colour, with the real Chapter 1 GrabPack (backpack, both launchers,
+  hands on the tubes). GrabPack and the red hand only show once that player really has them.
+- **Chapter 1 hands:** launched hands are the game's own animated hand, turned like the sender's hand and
+  closed when they hold on to something. Short shots are shown too (a hand counts as launched once it leaves
+  its launcher). The cable comes out of the tube.
+- **Chapter 1 objects:** boxes, crates, toy boxes, blocks, chairs, tables, stools, bins, signs, brooms, toy
+  parts... are shared while moved and stay where they were left (also after reloads and for late joiners).
+  The pull platforms in the factory move for everyone (no more standing in mid-air).
+- **Freeze fix (Chapter 1):** animation and physics calls now run after the frame's animation work (they
+  deadlocked with UE4SS's lock before). The mod also no longer goes silent after a checkpoint reload.
+- Launcher: old installs (e.g. the original 1.1.0 mod) are now detected as outdated and updated
+  (the installed-version check compared against a constant that was never patched).
+
+### 1.3.5
+- Chapter 1: doors swing for everyone exactly as opened; code pad and hand pad synced; crash fixes for areas
+  that are unloaded while you play.
+
+### 1.3.4
+- Chapter 2: launched hands turn toward where they were shot (palm to the target).
 
 ### 1.3.3
 - Merge of both 1.3.2 lines (keybinds.txt / dev tools opt-in / 30 s scan + the changes below).

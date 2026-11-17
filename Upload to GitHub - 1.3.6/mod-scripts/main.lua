@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.3.3"   -- 1.3.3: merge - keybinds.txt (F6 teleport), dev tools/perf log opt-in, 3+ players, public-room safety, hand fixes
+local VERSION = "1.3.6"   -- 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -31,8 +31,11 @@ function SafeUE.game_instance()
     local gs = SafeUE.gameplay_statics()
     if not gs then return nil end
     local ok, gi = pcall(function()
-        local pc = FindFirstOf("PlayerController")          -- fresh, used only right now
-        if not (pc and pc:IsValid()) then return nil end
+        local pc = nil                                      -- fresh, used only right now
+        for _, c in ipairs(FindAllOf("PlayerController") or {}) do
+            if c:IsValid() and c.Pawn and c.Pawn:IsValid() then pc = c; break end
+        end
+        if not pc then return nil end
         return gs:GetGameInstance(pc)
     end)
     if ok and gi and gi:IsValid() then SafeUE.gi = gi end
@@ -43,6 +46,15 @@ function SafeUE.player_controller()                      -- never cache the resu
     if not (gs and gi) then return nil end
     local ok, pc = pcall(function() return gs:GetPlayerController(gi, 0) end)
     if ok and pc and pc:IsValid() then return pc end
+    -- after RestartLevel the old controller (no pawn) can still be found first and the GameInstance lookup
+    -- returns nothing (seen in Chapter 1): take the controller that really has a pawn
+    local ok2, pc2 = pcall(function()
+        for _, c in ipairs(FindAllOf("PlayerController") or {}) do
+            if c:IsValid() and c.Pawn and c.Pawn:IsValid() then return c end
+        end
+    end)
+    SafeUE.gi = nil                                       -- look the GameInstance up again next time
+    if ok2 and pc2 then return pc2 end
     return nil
 end
 function SafeUE.world()
@@ -209,6 +221,69 @@ end
 
 local Handlers = { event = {}, join = {}, leave = {}, tick = {}, restart = {}, unload = {}, state = {} }   -- module hooks
 
+-- Freeze hunting (developers, crumbs_on.txt): before each block that calls into the engine, the block's
+-- name is written to crumb_<name>.txt (overwritten, flushed). When a game freezes, that file names the
+-- exact place. Off for players.
+local Crumb = { on = nil, frame = 0, path = nil }
+local function crumb(label)
+    if Crumb.on == false then return end
+    if Crumb.on == nil then
+        local f = io.open(MOD_DIR .. "\\crumbs_on.txt", "r")
+        Crumb.on = f ~= nil
+        if f then f:close() end
+        if not Crumb.on then return end
+    end
+    Crumb.path = Crumb.path or (MOD_DIR .. "\\crumb_" .. tostring(Config.name) .. ".txt")
+    local f = io.open(Crumb.path, "w")              -- open/write/close: flush alone left the file empty
+    if not f then return end
+    f:write(("f%d %s %s\n"):format(Crumb.frame, os.date("%H:%M:%S"), tostring(label)))
+    f:close()
+end
+
+-- LATE QUEUE. Anything that touches skeletal-mesh animation (PlayAnimation, SetAnimationMode, GetPosition,
+-- GetSocketLocation on an animated mesh...) must NOT run inside the player's tick: it waits for the engine's
+-- parallel animation tasks while UE4SS holds its lock, and those tasks call ProcessEvent, which needs the
+-- same lock -> deadlock, the game freezes (proven with a debugger). Such work is queued here and run from
+-- the crosshair widget's Tick (Chapter 1: CrosshairUI_C, on screen during gameplay). Widgets tick in the
+-- UI pass after the whole world tick, when all animation tasks of the frame are finished. (HUD draw was
+-- tried first: this game never fires it.) Without a crosshair the queue just stays small.
+local Late = { jobs = {}, hooked = false, every = {} }
+local function late(fn, label)
+    -- Chapter 2 has no late hook (and never froze like this): run right away, as before
+    if CHAPTER ~= 1 then pcall(fn); return end
+    if #Late.jobs >= 64 then table.remove(Late.jobs, 1) end
+    Late.jobs[#Late.jobs + 1] = { fn, label }
+end
+local function late_run()
+    Late.runs = (Late.runs or 0) + 1
+    local c0 = os.clock()
+    local jobs = Late.jobs
+    Late.jobs = {}
+    for _, j in ipairs(jobs) do
+        crumb("late " .. tostring(j[2]))
+        local ok, err = pcall(j[1])
+        if not ok then log("late job %s: %s", tostring(j[2]), tostring(err)) end
+    end
+    for _, h in ipairs(Late.every) do
+        crumb("late every " .. tostring(h[2]))
+        local ok, err = pcall(h[1])
+        if not ok then log("late %s: %s", tostring(h[2]), tostring(err)) end
+    end
+    crumb("late done")
+    local P0 = _G.PoppyCoop
+    if P0 and P0.Perf then P0.Perf.sec.late = (P0.Perf.sec.late or 0) + os.clock() - c0; P0.Perf.lua = P0.Perf.lua + os.clock() - c0 end
+end
+local LATE_HOOK = "/Game/Assets/Widgets/CrosshairUI.CrosshairUI_C:Tick"
+local function late_hook()
+    if Late.hooked or CHAPTER ~= 1 then return end
+    if Late.next_try and os.clock() < Late.next_try then return end
+    Late.next_try = os.clock() + 2
+    if not StaticFindObject("/Game/Assets/Widgets/CrosshairUI.CrosshairUI_C") then return end   -- not loaded yet
+    local ok, err = pcall(RegisterHook, LATE_HOOK, function() late_run() end)
+    Late.hooked = ok
+    log("late queue (crosshair tick): %s", ok and "on" or ("FAILED " .. tostring(err)))
+end
+
 local function on_line(line)
     local k = line:sub(1, 1)
     if k == "I" then
@@ -228,10 +303,12 @@ local function on_line(line)
         local kind, rest = payload:match("^(%S+)%s?(.*)$")
         local h = kind and Handlers.event[kind]
         if h then
+            crumb("event " .. tostring(kind) .. " " .. tostring(rest):sub(1, 80))
             local ok, err = pcall(h, id, rest)
             if not ok then log("event %s failed: %s", kind, tostring(err)) end
         end
     elseif k == "J" then
+        crumb("join " .. line:sub(1, 60))
         local id, name = line:match("^J (%d+) (.*)$")
         id = tonumber(id)
         Net.players[id] = Net.players[id] or {}
@@ -291,6 +368,11 @@ local Game = { pc = nil, pawn = nil, map = "?", world = nil }
 
 local function refresh_player()
     local pc = SafeUE.player_controller()                -- fresh every time (crash fix)
+    Game.why = pc and "safe" or "safe-nil"
+    if not pc and valid(Game.tick_pawn) then             -- after RestartLevel the lookups above can fail
+        pc = try(function() local c = Game.tick_pawn:GetController(); return c:IsValid() and c or nil end)
+        Game.why = pc and "tickpawn" or "tickpawn-nil"
+    elseif not pc then Game.why = "safe-nil, no tick pawn (" .. tostring(Game.tick_pawn) .. ")" end
     Game.pc = pc
     if not pc then Game.pawn = nil; return false end
     local pawn = try(function() return pc.Pawn end)
@@ -361,6 +443,36 @@ local function hand_tokens_ch2(pawn, loc)
     end
     return out
 end
+-- runs at UE4SS's game-thread point (not inside an actor tick): reads the launched hands' bone transform
+-- and grab state for the next state line
+local function hand_pose_job()
+    HandScan.job = false
+    local pose = {}
+    for _, e in ipairs(HandScan.list or {}) do
+        local ok, v = pcall(function()
+            if not e.a:IsValid() then return nil end
+            local par = e.a:GetAttachParentActor()
+            local name = par and par:IsValid() and par:GetFName():ToString() or ""
+            if name:find("Gun", 1, true) then return nil end            -- resting on its launcher
+            local sk = e.a.SK_Hand
+            local bone = FName("Hand_L")
+            local l, r, sc = sk:GetSocketLocation(bone), sk:GetSocketRotation(bone), sk:K2_GetComponentScale()
+            local ai = sk.AnimScriptInstance
+            local bits, dfp, th = 0, 100, 0
+            if ai and ai:GetAddress() ~= 0 then
+                bits = (ai["IsActive"] == true and 1 or 0) + (ai["IsTouched"] == true and 2 or 0) + (ai["IsSmacked"] == true and 4 or 0)
+                dfp, th = tonumber(ai["Distance From Palm"]) or 100, tonumber(ai["Thickness"]) or 0
+            end
+            local hold = try(function() return e.a:GetIsGrabbing() end) == true or try(function() return e.a:GetIsHolding() end) == true
+                or try(function() return e.a.bIsPulling end) == true
+            if hold then bits = bits + 8 end
+            return ("%.0f,%.0f,%.0f,%d,%d,%d,%d,%d,%d,%d"):format(l.X, l.Y, l.Z, math.floor(r.Pitch + 0.5), math.floor(r.Yaw + 0.5),
+                math.floor(r.Roll + 0.5), math.floor(math.abs(sc.X) * 1000 + 0.5), math.floor(dfp + 0.5), math.floor(th * 10 + 0.5), bits)
+        end)
+        if ok and v then pose[e.slot] = v end
+    end
+    HandScan.pose = pose
+end
 local function hand_tokens(pawn, loc)
     if CHAPTER == 2 then
         local ok, s = pcall(hand_tokens_ch2, pawn, loc)
@@ -368,6 +480,11 @@ local function hand_tokens(pawn, loc)
     end
     if HandScan.off then return "" end
     if game_time - HandScan.at > 3 then scan_hands(pawn) end
+    if HandScan.want and not HandScan.job then        -- bone + grab state of the real hands: read late
+        HandScan.job = true
+        late(function() hand_pose_job() end, "hand_pose")
+    end
+    HandScan.want = false
     local best = {}
     local ok, err = pcall(function()
         for _, e in ipairs(HandScan.list) do
@@ -376,7 +493,7 @@ local function hand_tokens(pawn, loc)
                 local dx, dy, dz = hl.X - loc.X, hl.Y - loc.Y, hl.Z - loc.Z
                 local d2 = dx * dx + dy * dy + dz * dz
                 if not best[e.slot] or (not HandScan.owned and d2 < best[e.slot].d2) then
-                    best[e.slot] = { d2 = d2, x = hl.X, y = hl.Y, z = hl.Z }
+                    best[e.slot] = { d2 = d2, x = hl.X, y = hl.Y, z = hl.Z, e = e }
                 end
             end
         end
@@ -385,9 +502,24 @@ local function hand_tokens(pawn, loc)
     local out = ""
     for slot, tag in pairs({ [0] = "L", [1] = "R" }) do
         local b = best[slot]
-        -- resting hands sit ~0.5-1 m from the capsule; anything further is launched (max reach ~20 m)
-        if b and b.d2 > 170 * 170 and b.d2 < 2500 * 2500 then
-            out = out .. (" %s=%.0f,%.0f,%.0f"):format(tag, b.x, b.y, b.z)
+        if b and b.d2 < 2500 * 2500 then
+            local e = b.e
+            -- a resting hand hangs on its launcher (attached to the GunComponent); a launched one is
+            -- detached - that catches short shots too, which the old distance test (> 1.7 m) missed
+            local launched = nil
+            if e then                                   -- only our own two hands exist in this game
+                local par = try(function() local a = e.a:GetAttachParentActor(); return a and a:IsValid() and a:GetFName():ToString() or "" end)
+                if par then launched = not par:find("Gun", 1, true) end
+            end
+            if launched == nil then launched = b.d2 > 170 * 170 end
+            if launched then
+                -- the real hand's pose is read at the safe game-thread point (hand_pose_job) and cached;
+                -- reading a skeletal mesh inside this tick waited on its animation task and froze the game
+                HandScan.want = true
+                local hp = HandScan.pose and HandScan.pose[slot]
+                local extra = hp and (" %s=%s"):format(tag, hp)
+                out = out .. (extra or (" %s=%.0f,%.0f,%.0f"):format(tag, b.x, b.y, b.z))
+            end
         end
     end
     return out
@@ -416,6 +548,11 @@ local function local_state()
     if yes("Flashlight On?") or yes("FlashlightOn") then flags = flags | 4 end
     if CHAPTER == 2 and try(function() return pawn["CurrentRight Extendo Hand"] end) == 1 then flags = flags | 32 end   -- green hand
     if Game.dead then flags = flags | 16 end
+    -- Chapter 1: the GrabPack and the red hand are found during the chapter (64 no left hand, 128 no right)
+    if CHAPTER == 1 then
+        if try(function() return pawn["hasLeftHand?"] end) == false then flags = flags | 64 end
+        if try(function() return pawn["hasRightHand?"] end) == false then flags = flags | 128 end
+    end
     -- airborne + capsule height: probed once; disabled for the session if the engine rejects it
     -- (engine-side errors leak Lua C stack, so never retry a failing call every frame)
     local z = loc.Z
@@ -447,6 +584,10 @@ local Assets = {}
 -- requested here, at most once per path per session, and the caller looks again a moment later.
 local AssetRequested = {}
 local function load_async(path)
+    -- Chapter 1: never. A synchronous LoadAsset run from UE4SS's ExecuteInGameThread queue (inside a
+    -- ProcessEvent) right after a level load is the prime suspect for the game freezes (all threads
+    -- waiting); Chapter 1 has every mesh the figures use loaded anyway once the player has the GrabPack.
+    if CHAPTER == 1 then return end
     if not path or AssetRequested[path] or not LoadAsset or not ExecuteInGameThread then return end
     AssetRequested[path] = true
     pcall(ExecuteInGameThread, function() pcall(LoadAsset, path) end)
@@ -549,6 +690,8 @@ local HAND_OF = { [BLUE] = "L", [RED] = "R" }
 -- never a random one.
 local BAD_MAT = { "decal", "emiss", "glow", "light", "vent", "copper", "glass", "water", "screen", "neon", "lamp", "fx", "ui" }
 local BASE_CANDIDATES = {
+    -- the toy plastic with a "Tint" colour (both chapters): every colour comes out right with it
+    "/Game/Assets/Materials/Environment_MATS/Instanced_Materials/yellowplastic_MATInst.yellowplastic_MATInst",
     "/Game/Materials/Instances/Environment/MI_Yellow.MI_Yellow",
     "/Game/Materials/Instances/MI_Yellow.MI_Yellow",
     "/Game/Materials/MI_Yellow.MI_Yellow",
@@ -596,9 +739,10 @@ local function tint_base()
     Tint.tries = Tint.tries + 1
     Tint.next_try = game_time + 2.5
     local cands = {}
+    cands[1] = BASE_CANDIDATES[1]
     local cached = color_cache_read().base or color_cache_read().yellow
     if cached and not bad_name(cached) then cands[#cands + 1] = cached end
-    for _, c in ipairs(BASE_CANDIDATES) do cands[#cands + 1] = c end
+    for i = 2, #BASE_CANDIDATES do cands[#cands + 1] = BASE_CANDIDATES[i] end
     for _, path in ipairs(cands) do
         local o = try(StaticFindObject, path)
         if valid(o) then Tint.base = o; break end
@@ -650,6 +794,8 @@ local function paint(actor, key)
         mid = try(function() return comp:CreateDynamicMaterialInstance(0, base, FName("None")) end)
         if valid(mid) then
             local ok = pcall(function() mid:SetVectorParameterValue(FName(Tint.param), { R = rgb[1], G = rgb[2], B = rgb[3], A = 1.0 }) end)
+            -- Chapter 1's MI_Yellow also glows yellow ("Emissive Color"), which drowns the colour in the dark
+            if ok then pcall(function() mid:SetVectorParameterValue(FName("Emissive Color"), { R = rgb[1] * 0.5, G = rgb[2] * 0.5, B = rgb[3] * 0.5, A = 1.0 }) end) end
             if ok then Tint.mids[key] = mid; return true end
         end
         Tint.mid_ok = false                          -- don't try again this session: plain paint instead
@@ -706,7 +852,12 @@ local F2A = {}           -- resolved assets
 local F2_failed = false
 
 local function f2_ready()
+    -- Chapter 1 (UE5) doesn't ship the mannequin or this hand rig: it uses its own GrabPack figure
     if F2_failed or CHAPTER ~= 2 then return false end
+    if F2A.ok then return true end
+    -- looking assets up is not free: at most twice a second while they load
+    if F2A.next_try and game_time < F2A.next_try then return false end
+    F2A.next_try = game_time + 0.5
     if F2A.ok then return true end
     local all = true
     for k, path in pairs(F2) do
@@ -857,6 +1008,34 @@ local function f2_play(f, name, rate)
     end
 end
 
+-- rotator math (UE conventions) for turning a flying hand toward where it was shot
+local function rot_axes(p, y, r)
+    local SP, CP, SY, CY = math.sin(math.rad(p)), math.cos(math.rad(p)), math.sin(math.rad(y)), math.cos(math.rad(y))
+    local SR, CR = math.sin(math.rad(r)), math.cos(math.rad(r))
+    return { CP * CY, CP * SY, SP }, { SR * SP * CY - CR * SY, SR * SP * SY + CR * CY, -SR * CP },
+           { -(CR * SP * CY + SR * SY), CY * SR - CR * SP * SY, CR * CP }
+end
+local function dot(a, b) return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function axes_rot(X, Y, Z)
+    local pitch = math.deg(math.atan(X[3], math.sqrt(X[1] * X[1] + X[2] * X[2])))
+    local yaw = math.deg(math.atan(X[2], X[1]))
+    local _, SYA = rot_axes(pitch, yaw, 0)
+    local roll = math.deg(math.atan(dot(Z, SYA), dot(Y, SYA)))
+    return pitch, yaw, roll
+end
+-- the hand's rest rotation (palm forward on the launcher) turned from "where the figure faces" to "where
+-- the hand flies": shot at the floor, the palm faces the floor - like the real hands
+local function aim_rotation(rr, face_yaw, dpitch, dyaw)
+    local RX, RY, RZ = rot_axes(rr.p, rr.y, rr.r)
+    local FX, FY, FZ = rot_axes(0, face_yaw, 0)
+    local DX, DY, DZ = rot_axes(dpitch, dyaw, 0)
+    local function turn(w)
+        local u = { dot(w, FX), dot(w, FY), dot(w, FZ) }
+        return { u[1] * DX[1] + u[2] * DY[1] + u[3] * DZ[1], u[1] * DX[2] + u[2] * DY[2] + u[3] * DZ[2], u[1] * DX[3] + u[2] * DY[3] + u[3] * DZ[3] }
+    end
+    return axes_rot(turn(RX), turn(RY), turn(RZ))
+end
+
 -- per frame: place the figure, pick its animation, fly the hands, recolour the green hand
 local function f2_update(p, st, c, dt, crouch, dead)
     local f = p.f2
@@ -894,11 +1073,10 @@ local function f2_update(p, st, c, dt, crouch, dead)
                 end
                 local hx, hy, hz = rest.x + (tgt.x - rest.x) * e, rest.y + (tgt.y - rest.y) * e, rest.z + (tgt.z - rest.z) * e
                 local vx, vy, vz = tgt.x - rest.x, tgt.y - rest.y, tgt.z - rest.z
-                local dyaw = math.deg(math.atan(vy, vx)) - c.yaw
                 local rr = f["rrot" .. tag]
+                local ap, ay, ar = aim_rotation(rr, c.yaw, math.deg(math.atan(vz, math.sqrt(vx * vx + vy * vy))), math.deg(math.atan(vy, vx)))
                 pcall(function()
-                    h:K2_SetActorLocationAndRotation({ X = hx, Y = hy, Z = hz },
-                        { Pitch = rr.p, Yaw = rr.y + dyaw, Roll = rr.r }, false, {}, true)
+                    h:K2_SetActorLocationAndRotation({ X = hx, Y = hy, Z = hz }, { Pitch = ap, Yaw = ay, Roll = ar }, false, {}, true)
                 end)
                 -- cable: thin black cylinder (100 tall along Z) from the launcher to the hand
                 local lx, ly, lz = hx - rest.x, hy - rest.y, hz - rest.z
@@ -951,12 +1129,433 @@ local function parse_state(s)
     if not x then return nil end
     local colour = s:match("^%S+ %S+ %S+ %S+ %S+ %d+ %S+ (%a+)")
     local hands = nil
-    for tag, hx, hy, hz in s:gmatch(" ([LR])=(%-?%d+),(%-?%d+),(%-?%d+)") do
-        hands = hands or {}
-        hands[tag] = { x = tonumber(hx), y = tonumber(hy), z = tonumber(hz) }
+    for tag, body in s:gmatch(" ([LR])=([%-%d,]+)") do
+        local n = {}
+        for v in body:gmatch("%-?%d+") do n[#n + 1] = tonumber(v) end
+        if #n >= 3 then
+            hands = hands or {}
+            local h = { x = n[1], y = n[2], z = n[3] }
+            if #n >= 10 then                    -- Chapter 1: rotation, size and grab state of the real hand
+                h.rot = { math.max(-360, math.min(360, n[4])), math.max(-360, math.min(360, n[5])), math.max(-360, math.min(360, n[6])) }
+                h.sc = math.max(0.02, math.min(2, n[7] / 1000))
+                h.dist, h.thick, h.bits = math.max(0, math.min(1000, n[8])), math.max(0, math.min(1000, n[9])), n[10] & 15
+            end
+            hands[tag] = h
+        end
     end
     return { x = tonumber(x), y = tonumber(y), z = tonumber(z), yaw = tonumber(yaw), pitch = tonumber(pitch),
              flags = tonumber(flags), map = map, color = colour, hands = hands }
+end
+
+------------------------------------------------------------ Chapter 1 GrabPack figure
+-- Chapter 1 has no mannequin, so its figure keeps the shape body - but carries the real GrabPack:
+-- backpack, both launchers and the real hands. The launcher and hand meshes share the first-person
+-- GrabPack frame (the hand sits exactly where it sits in your own view), so both are placed with one
+-- common transform per side; the right side is the same set mirrored. Hands fly like in Chapter 2.
+local G1_MESH = {
+    gun = "/Game/Assets/Meshes/hand_launcher/hand_launcher_L_gun.hand_launcher_L_gun",
+    hand = "/Game/Assets/Meshes/hand_launcher/hand_launcher_L_hand.hand_launcher_L_hand",
+    bpk = "/Game/Assets/Meshes/hand_launcher/hand_launcher_backpack.hand_launcher_backpack",
+}
+local G1S, G1B = 0.33, 0.40                         -- scale of launcher/hand set and of the backpack
+local G1_GUN = { 65.0, 123.6, -15.1 }               -- mesh-local centres in the first-person frame
+local G1_TIP = { 65.0, 168.3, -4.0 }                -- front end of the launcher tube, on its axis (the grip pulls the bounds centre down)
+local G1_HAND = { 55.6, 199.5, 39.3 }
+local G1_BPK = { 0.0, 27.3, -6.9 }
+-- in first person the hand floats ~10 cm ahead of the tube (perspective hides it); from outside it
+-- belongs on the tube end: move it back, a little outward and down (mesh-local units)
+local G1_SHIFT = { 1.4, -26.0, -3.0 }
+local G1A = {}
+local function g1_ready()
+    if CHAPTER ~= 1 then return false end
+    if G1A.ok then return true end
+    if G1A.next_try and game_time < G1A.next_try then return false end
+    G1A.next_try = game_time + 0.5
+    local all = true
+    for k, path in pairs(G1_MESH) do
+        if not valid(G1A[k]) then G1A[k] = find_asset(path) end
+        if not valid(G1A[k]) then all = false end
+    end
+    G1A.ok = all or nil
+    return all
+end
+-- parts of the shape figure that the real GrabPack replaces in Chapter 1
+local function g1_replaced(d)
+    return d[2] == TEAL or (d[10] == "arm" and d[1] == "b") or d[2] == BROWN or d[10] == "cable"
+        or (d[1] == "b" and d[2] == RED and d[10] == nil)                    -- backpack box
+end
+-- the game's own animated hand (SK_LeftHand + ABP_Hand, mirrored for the right): shown while a hand
+-- flies, with the sender's exact transform and grab state. Optional - without it the static hand flies.
+local G1_SK = { mesh = "/Game/Player/New_Hands/SK_LeftHand.SK_LeftHand", abp = "/Game/Player/New_Hands/ABP_Hand.ABP_Hand_C",
+                ska = "/Script/Engine.SkeletalMeshActor" }
+local G1K = {}
+-- OFF: everything animation-related called from Lua (SetAnimationMode, GetSocketLocation on an animated
+-- hand, PlayAnimation...) waits for the engine's parallel animation tasks while UE4SS holds its lock -
+-- and those tasks call ProcessEvent, which needs the same lock: deadlock, the game freezes (proven with
+-- a debugger, 2026-11-17). Comes back only from a hook that runs after animation has finished.
+local G1_SK_ON = true          -- back on: everything animation-related runs from the late queue
+local function g1_sk_ready()
+    if not G1_SK_ON then return false end
+    if G1K.ok then return true end
+    if G1K.next_try and game_time < G1K.next_try then return false end
+    G1K.next_try = game_time + 1.0
+    local all = true
+    for k, path in pairs(G1_SK) do
+        if not valid(G1K[k]) then G1K[k] = find_asset(path) end
+        if not valid(G1K[k]) then all = false end
+    end
+    G1K.ok = all or nil
+    return all
+end
+local function g1_sk_spawn(p)
+    local g = p.g1
+    local world = UEHelpers.GetWorld()
+    if not valid(world) then return end
+    local n = 0
+    for k in pairs(p.parts) do n = math.max(n, k) end
+    for _, side in ipairs({ "L", "R" }) do
+        local c0 = p.cur or { x = 0, y = 0, z = 0 }
+        local a = try(function() return world:SpawnActor(G1K.ska, { X = c0.x, Y = c0.y, Z = c0.z }, { Pitch = 0, Yaw = 0, Roll = 0 }) end)
+        if valid(a) then
+            pcall(function() a:SetActorEnableCollision(false) end)
+            pcall(function()
+                local c = a.SkeletalMeshComponent
+                c:SetSkeletalMeshAsset(G1K.mesh)
+                c:SetCollisionEnabled(0)
+                -- SetAnimInstanceClass fails here (engine error): set the property; the anim instance is
+                -- created when the hand is first shown (g1_anim_safe)
+                c.AnimClass = G1K.abp
+            end)
+            -- same colour as the static hand
+            pcall(function() a.SkeletalMeshComponent:SetMaterial(0, g["hand" .. side].StaticMeshComponent:GetMaterial(0)) end)
+            pcall(function() a:SetActorHiddenInGame(true) end)
+            g["skh" .. side] = a
+            n = n + 1
+            p.parts[n] = a
+            p.paths[n] = try(function() return a:GetFullName():match("^%S+ (.+)$") end)
+        end
+    end
+    g.sk = true
+end
+-- place the animated hand so that its hand bone has the sent world transform: read where the bone sits
+-- relative to the component in the current pose, then put the component there
+local G1_BONE = nil
+local function g1_sk_place(g, side, a, bx, by, bz, rot)
+    G1_BONE = G1_BONE or FName("Hand_L")
+    local c = a.SkeletalMeshComponent
+    local cl, cr = c:K2_GetComponentLocation(), c:K2_GetComponentRotation()
+    local bl, br = c:GetSocketLocation(G1_BONE), c:GetSocketRotation(G1_BONE)
+    local CX, CY, CZ = rot_axes(cr.Pitch, cr.Yaw, cr.Roll)
+    local BX, BY, BZ = rot_axes(br.Pitch, br.Yaw, br.Roll)
+    local C, B = { CX, CY, CZ }, { BX, BY, BZ }
+    -- bone relative to the component (rotation and offset, component axes)
+    local rel = {}
+    for j = 1, 3 do rel[j] = {} for k = 1, 3 do rel[j][k] = dot(C[j], B[k]) end end
+    local d = { bl.X - cl.X, bl.Y - cl.Y, bl.Z - cl.Z }
+    local v = { dot(C[1], d), dot(C[2], d), dot(C[3], d) }
+    -- wanted component axes: sent bone axes combined with the inverse relative rotation
+    local SX, SY, SZ = rot_axes(rot[1], rot[2], rot[3])
+    local S = { SX, SY, SZ }
+    local N = {}
+    for j = 1, 3 do
+        N[j] = { 0, 0, 0 }
+        for k = 1, 3 do for i = 1, 3 do N[j][i] = N[j][i] + S[k][i] * rel[j][k] end end
+    end
+    local np, ny, nr = axes_rot(N[1], N[2], N[3])
+    local ox = bx - (N[1][1] * v[1] + N[2][1] * v[2] + N[3][1] * v[3])
+    local oy = by - (N[1][2] * v[1] + N[2][2] * v[2] + N[3][2] * v[3])
+    local oz = bz - (N[1][3] * v[1] + N[2][3] * v[2] + N[3][3] * v[3])
+    a:K2_SetActorLocationAndRotation({ X = ox, Y = oy, Z = oz }, { Pitch = np, Yaw = ny, Roll = nr }, false, {}, true)
+end
+-- Animation calls (SetAnimationMode, PlayAnimation...) made inside the player's tick, while the engine
+-- evaluates animations in parallel, are the prime suspect for two full game freezes (all threads
+-- waiting on each other). Run them at UE4SS's game-thread point instead, outside any actor tick.
+-- animation work goes to the late queue (see Late)
+local function g1_anim_safe(fn, label)
+    late(fn, label)
+end
+-- grab state of the animated hand: only written when it changes
+local function g1_sk_anim(g, side, h)
+    local key = string.format("%d %d %d", h.dist or 100, h.thick or 0, h.bits or 0)
+    if g["skk" .. side] == key then return end
+    g["skk" .. side] = key
+    local a = g["skh" .. side]
+    local hold = ((h.bits or 0) & 8) ~= 0                 -- holding on: closed hand
+    pcall(function()
+        local ai = a.SkeletalMeshComponent.AnimScriptInstance
+        if not ai or ai:GetAddress() == 0 then return end
+        ai["Distance From Palm"] = hold and 0 or (h.dist or 100)
+        ai["Thickness"] = (h.thick or 0) / 10
+        ai["IsActive"] = hold or ((h.bits or 0) & 1) ~= 0
+        ai["IsTouched"] = hold or ((h.bits or 0) & 2) ~= 0
+        ai["IsSmacked"] = ((h.bits or 0) & 4) ~= 0
+    end)
+end
+
+local function g1_spawn(p, st)
+    local g = {}
+    for _, side in ipairs({ "L", "R" }) do
+        local m = side == "L" and 1 or -1
+        g["gun" .. side] = spawn_mesh(G1A.gun, st.x, st.y, st.z, G1S * m, G1S, G1S)
+        local h = spawn_mesh(G1A.hand, st.x, st.y, st.z, G1S * m, G1S, G1S)
+        if h then paint(h, side == "L" and BLUE or RED) end
+        g["hand" .. side] = h
+        local cab = spawn_mesh(Assets.body, st.x, st.y, st.z, 0.025, 0.025, 0.001)
+        if cab then paint(cab, "black") end
+        g["cable" .. side] = cab
+    end
+    g.bpk = spawn_mesh(G1A.bpk, st.x, st.y, st.z, G1B, G1B, G1B)
+    local n = #FIGURE                       -- after the figure's own slots (some of them stay empty)
+    for k in pairs(p.parts) do n = math.max(n, k) end
+    for _, a in pairs(g) do
+        n = n + 1
+        p.parts[n] = a
+        p.paths[n] = try(function() return a:GetFullName():match("^%S+ (.+)$") end)
+    end
+    p.g1 = g
+end
+-- figure-local point (x forward, y right, z up from the capsule centre) -> world
+local function g1_world(c, x, y, z)
+    local cy, sy = math.cos(math.rad(c.yaw)), math.sin(math.rad(c.yaw))
+    return c.x + x * cy - y * sy, c.y + x * sy + y * cy, c.z + z
+end
+local function g1_show(a, show)
+    if valid(a) then pcall(function() a:SetActorHiddenInGame(not show) end) end
+end
+local function g1_update(p, st, c, crouch)
+    local g = p.g1
+    -- only what the player really has: no GrabPack yet / no red hand yet
+    local dead = (st.flags & 16) ~= 0                             -- lying figure: the pack would float
+    local has = { L = not dead and (st.flags & 64) == 0, R = not dead and (st.flags & 128) == 0 }
+    local vis = (has.L and 1 or 0) + (has.R and 2 or 0)
+    if vis ~= g.vis then
+        g.vis = vis
+        for _, side in ipairs({ "L", "R" }) do
+            g1_show(g["gun" .. side], has.L or has.R)          -- the pack carries both launchers
+            g1_show(g["hand" .. side], has[side])
+            g1_show(g["cable" .. side], has[side])
+        end
+        g1_show(g.bpk, has.L or has.R)
+    end
+    local ang = math.rad((p.aim or 0) + (p.air or 0) * 12)        -- arms follow the look pitch
+    local dz = crouch and -30 or 0
+    local function aimed(x, z)                                    -- rotate around the shoulder (z = 32)
+        local dx, dzz = x, z - 32
+        return dx * math.cos(ang) - dzz * math.sin(ang), 32 + dx * math.sin(ang) + dzz * math.cos(ang)
+    end
+    local rot = { Pitch = 0, Yaw = c.yaw - 90, Roll = -math.deg(ang) }
+    for _, side in ipairs({ "L", "R" }) do
+        local m = side == "L" and 1 or -1
+        -- frame origin so that the launcher's centre lands at the arm's end (x 38, y -+26, z 32)
+        local fx, fz = aimed(38 - G1_GUN[2] * G1S, 32 - G1_GUN[3] * G1S)
+        local fy = -26 * m + G1_GUN[1] * G1S * m
+        local ox, oy, oz = g1_world(c, fx, fy, fz + dz)
+        local gun, hand, cab = g["gun" .. side], g["hand" .. side], g["cable" .. side]
+        if valid(gun) then pcall(function() gun:K2_SetActorLocationAndRotation({ X = ox, Y = oy, Z = oz }, rot, false, {}, true) end) end
+        -- where the hand rests and where the launcher tube ends, in world space
+        local X, Y, Z = rot_axes(rot.Pitch, rot.Yaw, rot.Roll)
+        local function w(v) return ox + X[1] * v[1] * G1S * m + Y[1] * v[2] * G1S + Z[1] * v[3] * G1S,
+                                 oy + X[2] * v[1] * G1S * m + Y[2] * v[2] * G1S + Z[2] * v[3] * G1S,
+                                 oz + X[3] * v[1] * G1S * m + Y[3] * v[2] * G1S + Z[3] * v[3] * G1S end
+        local rx, ry, rz = w({ G1_HAND[1] + G1_SHIFT[1], G1_HAND[2] + G1_SHIFT[2], G1_HAND[3] + G1_SHIFT[3] })
+        local sx, sy, sz = w(G1_SHIFT)                            -- the hand actor's origin at rest
+        local tx, ty, tz = w(G1_TIP)
+        local e, tgt = p.ext[side], p.hand[side]
+        if valid(hand) then
+            local skh = g["skh" .. side]
+            local real = e > 0.03 and tgt and tgt.rot and valid(skh)
+            if real ~= (g["skon" .. side] or false) then          -- swap static <-> animated hand
+                g["skon" .. side] = real
+                g1_show(skh, real)
+                g1_show(hand, has[side] and not real)
+                if real then
+                    -- (re)start the hand animation now that it is visible: started while hidden at spawn
+                    -- it doesn't run, and the grab pose then never shows
+                    local comp = skh.SkeletalMeshComponent
+                    g1_anim_safe(function() comp:SetAnimationMode(0) end, "SetAnimationMode")
+                    g["skk" .. side] = nil
+                end
+            end
+            if real then
+                local hx, hy, hz = rx + (tgt.x - rx) * e, ry + (tgt.y - ry) * e, rz + (tgt.z - rz) * e
+                local sc = tgt.sc or 0.15
+                local trot = tgt.rot                                  -- placed outside the actor tick
+                g1_anim_safe(function() if valid(skh) then g1_sk_place(g, side, skh, hx, hy, hz, trot) end end, "sk_place")
+                if g["sksc" .. side] ~= sc then
+                    g["sksc" .. side] = sc
+                    pcall(function() skh:SetActorScale3D({ X = sc, Y = side == "R" and -sc or sc, Z = sc }) end)
+                end
+                local tcopy = { dist = tgt.dist, thick = tgt.thick, bits = tgt.bits }
+                g1_anim_safe(function() if valid(skh) then g1_sk_anim(g, side, tcopy) end end, "sk_anim")
+                if valid(cab) then
+                    local lx, ly, lz = hx - tx, hy - ty, hz - tz
+                    local len = math.sqrt(lx * lx + ly * ly + lz * lz)
+                    pcall(function()
+                        cab:K2_SetActorLocationAndRotation({ X = (tx + hx) / 2, Y = (ty + hy) / 2, Z = (tz + hz) / 2 },
+                            { Pitch = 90 + math.deg(math.atan(lz, math.sqrt(lx * lx + ly * ly))), Yaw = math.deg(math.atan(ly, lx)), Roll = 0 }, false, {}, true)
+                        cab:SetActorScale3D({ X = 0.025, Y = 0.025, Z = math.max(0.001, len / 100) })
+                    end)
+                end
+            elseif e > 0.03 and tgt then
+                local hx, hy, hz = rx + (tgt.x - rx) * e, ry + (tgt.y - ry) * e, rz + (tgt.z - rz) * e
+                local vx, vy, vz = tgt.x - rx, tgt.y - ry, tgt.z - rz
+                local ap, ay, ar = aim_rotation({ p = rot.Pitch, y = rot.Yaw, r = rot.Roll }, c.yaw,
+                    math.deg(math.atan(vz, math.sqrt(vx * vx + vy * vy))), math.deg(math.atan(vy, vx)))
+                local X2, Y2, Z2 = rot_axes(ap, ay, ar)
+                local o2x = hx - (X2[1] * G1_HAND[1] * G1S * m + Y2[1] * G1_HAND[2] * G1S + Z2[1] * G1_HAND[3] * G1S)
+                local o2y = hy - (X2[2] * G1_HAND[1] * G1S * m + Y2[2] * G1_HAND[2] * G1S + Z2[2] * G1_HAND[3] * G1S)
+                local o2z = hz - (X2[3] * G1_HAND[1] * G1S * m + Y2[3] * G1_HAND[2] * G1S + Z2[3] * G1_HAND[3] * G1S)
+                pcall(function() hand:K2_SetActorLocationAndRotation({ X = o2x, Y = o2y, Z = o2z }, { Pitch = ap, Yaw = ay, Roll = ar }, false, {}, true) end)
+                if valid(cab) then
+                    local lx, ly, lz = hx - tx, hy - ty, hz - tz
+                    local len = math.sqrt(lx * lx + ly * ly + lz * lz)
+                    pcall(function()
+                        cab:K2_SetActorLocationAndRotation({ X = (tx + hx) / 2, Y = (ty + hy) / 2, Z = (tz + hz) / 2 },
+                            { Pitch = 90 + math.deg(math.atan(lz, math.sqrt(lx * lx + ly * ly))), Yaw = math.deg(math.atan(ly, lx)), Roll = 0 }, false, {}, true)
+                        cab:SetActorScale3D({ X = 0.025, Y = 0.025, Z = math.max(0.001, len / 100) })
+                    end)
+                end
+            else
+                pcall(function() hand:K2_SetActorLocationAndRotation({ X = sx, Y = sy, Z = sz }, rot, false, {}, true) end)
+                if valid(cab) then pcall(function() cab:SetActorScale3D({ X = 0.025, Y = 0.025, Z = 0.001 }) end) end
+            end
+        end
+    end
+    -- backpack on the back
+    if valid(g.bpk) then
+        local bx, by, bz = g1_world(c, (p.m1 and -15 or -26) - G1_BPK[2] * G1B, 0, (p.m1 and 28 or 24) - G1_BPK[3] * G1B + dz)   -- the mannequin is slimmer
+        pcall(function() g.bpk:K2_SetActorLocationAndRotation({ X = bx, Y = by, Z = bz }, { Pitch = 0, Yaw = c.yaw - 90, Roll = 0 }, false, {}, true) end)
+    end
+end
+
+------------------------------------------------------------ Chapter 1 mannequin
+-- The player is a faceless mannequin with a round head (the figure Chapter 2 ships, which Chapter 1
+-- doesn't have). Chapter 1 builds it from the engine's sphere and cylinder: rounded chest and pelvis,
+-- jointed arms and legs (knees and elbows solved with two-bone IK), walking, crouching, jumping and
+-- lying down when dead. The arms hold the real GrabPack launchers (g1_*) or swing when there is none.
+-- Points are figure-local: x forward, y right, z up from the capsule centre (the floor is z = -88).
+local M1_PARTS = {   -- name, mesh ("s" sphere / "c" cylinder), thickness X, Y (cm)
+    { "head", "s" }, { "neck", "c", 9, 9 }, { "chest", "s" }, { "waist", "c", 18, 26 }, { "pelvis", "s" },
+    { "thighL", "c", 14, 14 }, { "thighR", "c", 14, 14 }, { "shinL", "c", 11, 11 }, { "shinR", "c", 11, 11 },
+    { "kneeL", "s" }, { "kneeR", "s" }, { "footL", "s" }, { "footR", "s" },
+    { "uarmL", "c", 10, 10 }, { "uarmR", "c", 10, 10 }, { "farmL", "c", 9, 9 }, { "farmR", "c", 9, 9 },
+    { "elbowL", "s" }, { "elbowR", "s" }, { "fistL", "s" }, { "fistR", "s" }, { "shoulderL", "s" }, { "shoulderR", "s" },
+}
+local M1_LEG, M1_UARM, M1_FARM = 39, 27, 25          -- thigh = shin length; upper arm; forearm
+local M1_GRIP = { 33, 30 }                           -- the launcher grip (x, z) the fists hold
+local function m1_enabled() return CHAPTER == 1 and valid(Assets.head) and valid(Assets.body) end
+
+local function m1_spawn(p, st, key)
+    p.m1 = {}
+    for i, d in ipairs(M1_PARTS) do
+        local a = spawn_mesh(d[2] == "s" and Assets.head or Assets.body, st.x, st.y, st.z, 0.1, 0.1, 0.1)
+        p.keys[i] = key
+        if a and not paint(a, key) then p.unpainted = true end
+        p.parts[i] = a
+        p.paths[i] = a and try(function() return a:GetFullName():match("^%S+ (.+)$") end)
+        p.m1[d[1]] = i
+    end
+end
+
+-- two-bone IK in the side plane: from root (x, z) towards target, bend = +1 knee forward / -1 elbow down
+local function m1_ik(rx, rz, tx, tz, l1, l2, bend)
+    local dx, dz = tx - rx, tz - rz
+    local d = math.sqrt(dx * dx + dz * dz)
+    d = math.max(1, math.min(d, l1 + l2 - 0.5))
+    local ux, uz = dx / math.max(1e-6, math.sqrt(dx * dx + dz * dz)), dz / math.max(1e-6, math.sqrt(dx * dx + dz * dz))
+    local a = math.acos(math.max(-1, math.min(1, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d)))) * bend
+    local jx, jz = rx + l1 * (ux * math.cos(a) - uz * math.sin(a)), rz + l1 * (ux * math.sin(a) + uz * math.cos(a))
+    return jx, jz, rx + ux * d, rz + uz * d
+end
+
+-- SetActorScale3D only when the size really changes (most parts never change it): each engine call
+-- costs ~0.05-0.1 ms, and the mannequin has 23 parts
+local function m1_scale(p, name, a, x, y, z)
+    p.m1s = p.m1s or {}
+    local o = p.m1s[name]
+    if o and math.abs(o[1] - x) < 0.002 and math.abs(o[2] - y) < 0.002 and math.abs(o[3] - z) < 0.002 then return end
+    p.m1s[name] = { x, y, z }
+    pcall(function() a:SetActorScale3D({ X = x, Y = y, Z = z }) end)
+end
+local function m1_update(p, st, c, crouch, dead, swing, bob, amount)
+    -- nothing moved (standing still, same look pitch): skip all engine calls this frame
+    local key = string.format("%.1f %.1f %.1f %.1f %.2f %.2f %.2f %.1f %s %s %d %s", c.x, c.y, c.z, c.yaw, swing, bob,
+        p.air or 0, p.aim or 0, tostring(crouch), tostring(dead), st.flags, tostring(p.g1 ~= nil))
+    if key == p.m1key then return false end
+    p.m1key = key
+    local cy, sy = math.cos(math.rad(c.yaw)), math.sin(math.rad(c.yaw))
+    local function T(x, z)                                       -- dead: lying on the back
+        if dead then return -(z + 88), -80 + x * 0.3 end
+        return x, z
+    end
+    local function A(name) return part(p, p.m1[name]) end
+    local function put(name, x, y, z, sx, sy2, sz, pitch)
+        local a = A(name); if not a then return end
+        local wx, wz = T(x, z)
+        pcall(function()
+            a:K2_SetActorLocationAndRotation({ X = c.x + wx * cy - y * sy, Y = c.y + wx * sy + y * cy, Z = c.z + wz },
+                { Pitch = (pitch or 0) + (dead and -90 or 0), Yaw = c.yaw, Roll = 0 }, false, {}, true)
+        end)
+        m1_scale(p, name, a, sx / 100, sy2 / 100, sz / 100)
+    end
+    local function seg(name, ax, az, bx, bz, y)                  -- cylinder from a to b
+        local d = M1_PARTS[p.m1[name]]
+        local x1, z1 = T(ax, az); local x2, z2 = T(bx, bz)
+        local dx, dz = x2 - x1, z2 - z1
+        local len = math.sqrt(dx * dx + dz * dz)
+        local a = A(name); if not a then return end
+        local mx, mz = (x1 + x2) / 2, (z1 + z2) / 2
+        pcall(function()
+            a:K2_SetActorLocationAndRotation({ X = c.x + mx * cy - y * sy, Y = c.y + mx * sy + y * cy, Z = c.z + mz },
+                { Pitch = math.deg(math.atan(-dx, dz)), Yaw = c.yaw, Roll = 0 }, false, {}, true)
+        end)
+        m1_scale(p, name, a, d[3] / 100, d[4] / 100, math.max(0.01, len / 100))
+    end
+    local up = (crouch and -30 or 0) + bob                       -- upper body offset
+    -- torso
+    put("head", 0, 0, 72 + up, 30, 30, 30)
+    seg("neck", 0, 51 + up, 0, 60 + up, 0)
+    put("chest", 0, 0, 34 + up, 22, 40, 36)
+    seg("waist", 0, 8 + up * 0.6, 0, 20 + up * 0.8, 0)
+    put("pelvis", 0, 0, (crouch and -26 or 0) + bob * 0.5, 22, 34, 20)
+    -- legs
+    local hipz = (crouch and -32 or -6) + bob * 0.5
+    for _, s in ipairs({ { "L", -9, 1 }, { "R", 9, -1 } }) do
+        local side, y, sg = s[1], s[2], s[3]
+        local th = math.rad(swing * sg + p.air * (sg > 0 and 28 or -14))
+        local reach = 2 * M1_LEG - (crouch and 0 or 0) - p.air * 18
+        local tx, tz = reach * math.sin(th), hipz - reach * math.cos(th)
+        local lift = math.max(0, math.cos(p.phase or 0) * sg) * 7 * amount
+        if crouch then tx, tz = 6, -84 end
+        tz = math.max(-84, tz) + lift * (crouch and 0 or 1)
+        local kx, kz, ax, az = m1_ik(0, hipz, tx, tz, M1_LEG, M1_LEG, 1)
+        seg("thigh" .. side, 0, hipz, kx, kz, y)
+        seg("shin" .. side, kx, kz, ax, az, y)
+        put("knee" .. side, kx, y, kz, 13, 13, 13)
+        put("foot" .. side, ax + 6, y, az - 3, 26, 11, 8)
+    end
+    -- arms: on the GrabPack's launchers (same frame as g1_update), or hanging and swinging
+    local grab = p.g1 and ((st.flags & 64) == 0 or (st.flags & 128) == 0)
+    local ang = math.rad((p.aim or 0) + (p.air or 0) * 12)
+    for _, s in ipairs({ { "L", -1 }, { "R", 1 } }) do
+        local side, sg = s[1], s[2]
+        local shx, shz, shy = 0, 46 + up, 23 * sg
+        local tx, tz
+        if grab then                                                 -- the launcher's grip
+            local dx, dz = M1_GRIP[1], M1_GRIP[2] - 32
+            tx, tz = dx * math.cos(ang) - dz * math.sin(ang), 32 + dx * math.sin(ang) + dz * math.cos(ang) + (crouch and -30 or 0)
+        else
+            local th = math.rad(-swing * (side == "L" and 1 or -1) * 0.8)
+            tx, tz = shx + 48 * math.sin(th) + 4, shz - 48 * math.cos(th)
+        end
+        local ex, ez, wx, wz = m1_ik(shx, shz, tx, tz, M1_UARM, M1_FARM, -1)
+        local wy = grab and 26 * sg or 25 * sg
+        put("shoulder" .. side, shx, shy, shz, 13, 13, 13)
+        seg("uarm" .. side, shx, shz, ex, ez, (shy + wy) / 2)
+        seg("farm" .. side, ex, ez, wx, wz, wy)
+        put("elbow" .. side, ex, (shy + wy) / 2, ez, 10, 10, 10)
+        put("fist" .. side, wx, wy, wz, 11, 10, 11)
+    end
 end
 
 local function update_puppets(dt)
@@ -964,9 +1563,8 @@ local function update_puppets(dt)
     for _, p in pairs(Puppets) do
         if p.unpainted and tint_base() then
             local left = false
-            for i, d in ipairs(FIGURE) do
-                local a = p.parts[i]
-                if a and p.keys and not paint(a, p.keys[i]) then left = true end
+            for i, a in pairs(p.parts) do
+                if a and p.keys and p.keys[i] and not paint(a, p.keys[i]) then left = true end
             end
             p.unpainted = left or nil
         end
@@ -988,12 +1586,20 @@ local function update_puppets(dt)
                 end
             end
             if not p and (F2_failed or CHAPTER ~= 2) then
+                crumb("spawn puppet " .. tostring(id))
                 resolve_assets()
                 p = { cur = { x = st.x, y = st.y, z = st.z, yaw = st.yaw }, color = st.color }
                 p.parts = {}
                 local meshes = { c = Assets.body, s = Assets.head, b = Assets.cube or Assets.body }
-                for i, d in ipairs(FIGURE) do
-                    local a = spawn_mesh(meshes[d[1]], st.x, st.y, st.z + d[5], d[6], d[7], d[8])
+                local grab = g1_ready()
+                local mann = m1_enabled()
+                if mann then
+                    p.keys, p.paths = {}, {}
+                    m1_spawn(p, st, (st.color and BODY_COLOURS[st.color]) and st.color or YEL)
+                end
+                for i, d in ipairs(mann and {} or FIGURE) do
+                    local a = nil
+                    if not (grab and g1_replaced(d)) then a = spawn_mesh(meshes[d[1]], st.x, st.y, st.z + d[5], d[6], d[7], d[8]) end
                     p.keys = p.keys or {}
                     local key = d[2]
                     if key == YEL and st.color and BODY_COLOURS[st.color] then key = st.color end
@@ -1003,9 +1609,11 @@ local function update_puppets(dt)
                     p.paths = p.paths or {}
                     p.paths[i] = a and try(function() return a:GetFullName():match("^%S+ (.+)$") end)
                 end
+                p.paths = p.paths or {}
+                if grab then pcall(g1_spawn, p, st) end
                 p.tag = spawn_tag(pl.name or ("P" .. id), st.x, st.y, st.z + 120)
                 Puppets[id] = p
-                log("spawned puppet for %s (%s)", pl.name or id, valid(p.parts[3]) and "ok" or "FAILED")
+                log("spawned puppet for %s (%s%s%s)", pl.name or id, valid(p.parts[3]) and "ok" or "FAILED", grab and ", real GrabPack" or "", mann and ", mannequin" or "")
             end
             if not p then goto next_player end      -- figure assets still loading
             p.tgt = st
@@ -1056,11 +1664,28 @@ local function update_puppets(dt)
                     local cur = p.hand[tag]
                     if not cur or p.ext[tag] < 0.05 then p.hand[tag] = { x = h.x, y = h.y, z = h.z }
                     else local k = math.min(1, dt * 18); cur.x, cur.y, cur.z = cur.x + (h.x - cur.x) * k, cur.y + (h.y - cur.y) * k, cur.z + (h.z - cur.z) * k end
+                    local hc = p.hand[tag]
+                    hc.rot, hc.sc, hc.dist, hc.thick, hc.bits = h.rot, h.sc, h.dist, h.thick, h.bits   -- real hand pose (Chapter 1)
                 end
                 p.ext[tag] = p.ext[tag] + ((h and 1 or 0) - p.ext[tag]) * math.min(1, dt * (h and 16 or 9))
             end
             if p.f2 then
                 f2_update(p, st, c, dt, crouch, dead)
+                goto figure_done
+            end
+            if p.m1 then
+                crumb("m1 " .. tostring(id))
+                if not p.g1 and g1_ready() then pcall(g1_spawn, p, st) end    -- GrabPack meshes loaded late
+                if p.g1 and not p.g1.sk and not p.g1.sk_pending and g1_sk_ready() then
+                    p.g1.sk_pending = true                    -- built outside the actor tick (g1_anim_safe)
+                    g1_anim_safe(function() if Puppets[id] == p and not Game.loading then g1_sk_spawn(p) end end, "sk_spawn")
+                end
+                crumb("m1_update " .. tostring(id))
+                local ok, moved = pcall(m1_update, p, st, c, crouch, dead, swing, bob, amount)
+                crumb("g1_update " .. tostring(id))
+                local flying = p.ext.L > 0.002 or p.ext.R > 0.002 or p.g1fly
+                p.g1fly = p.ext.L > 0.002 or p.ext.R > 0.002      -- one more pass after the hands are back
+                if p.g1 and (moved ~= false or flying) then pcall(g1_update, p, st, c, crouch) end
                 goto figure_done
             end
             do
@@ -1157,6 +1782,7 @@ local function update_puppets(dt)
                 end
                 p.green = green
             end
+            if p.g1 then pcall(g1_update, p, st, c, crouch) end
             end
             ::figure_done::
             p.crouched = crouch
@@ -1405,22 +2031,30 @@ local function tick(dt)
         end
         return
     end
+    Crumb.frame = Crumb.frame + 1
+    if not Late.hooked then late_hook() end
+    crumb("refresh_player")
     local have = refresh_player()
     if have and ghosts then ghost_tick(dt) end
     send_accum = send_accum + dt
     if send_accum >= 1 / Config.send_hz then
         send_accum = 0
+        crumb("local_state")
         local st = have and try(local_state) or nil
         -- don't resend identical state more than once a second
         if st and st == last_sent and game_time - last_sent_t < 1 then st = nil end
         if st then last_sent, last_sent_t = st, game_time end
+        crumb("net_poll")
         net_poll(st)
     end
     local c0 = os.clock()
+    crumb("update_puppets")
     if have then update_puppets(dt) end
+    crumb("after update_puppets")
     Perf.sec.figures = (Perf.sec.figures or 0) + os.clock() - c0
     if TpReq then TpReq = false; if have then pcall(teleport_to_friend) end end
     for i, h in ipairs(Handlers.tick) do
+        crumb("module tick " .. i)
         local c1 = os.clock()
         local ok, err = pcall(h, dt, have)
         if not ok then log("module tick error: %s", tostring(err)) end
@@ -1467,7 +2101,9 @@ local function hook_tick()
             return os.clock()
         end
         local last = realtime()
-        RegisterHook("/Game/Player/PlayerBP.PlayerBP_C:ReceiveTick", function()
+        RegisterHook("/Game/Player/PlayerBP.PlayerBP_C:ReceiveTick", function(ctx)
+            -- the ticking pawn itself: a lookup that can't fail (only valid during this call)
+            Game.tick_pawn = ctx and try(function() return ctx:get() end) or nil
             -- a new world (checkpoint reload) -> forget cached objects BEFORE anything touches them
             local w = SafeUE.world()
             local wa = w and try(function() return tostring(w:GetAddress()) end)
@@ -1480,6 +2116,7 @@ local function hook_tick()
             if dt > 0 and dt < 5 then Perf.real = Perf.real + dt end
             if dt <= 0 or dt > 0.5 then dt = 0.016 end
             local ok2, e2 = pcall(tick, dt)
+            Game.tick_pawn = nil
             if not ok2 then log("tick error: %s", tostring(e2)) end
             Perf.lua = Perf.lua + (os.clock() - c0)
             Perf.frames = Perf.frames + 1
@@ -1500,6 +2137,8 @@ function world_unloading()
     for k in pairs(Puppets) do Puppets[k] = nil end   -- the engine destroys the actors itself
     for k in pairs(Assets) do Assets[k] = nil end
     for k in pairs(F2A) do F2A[k] = nil end           -- figure assets may be garbage collected with the level
+    for k in pairs(G1A) do G1A[k] = nil end
+    for k in pairs(G1K) do G1K[k] = nil end
     for k in pairs(AssetRequested) do AssetRequested[k] = nil end   -- ...so they may need loading again
     Tint.base, Tint.mids, Tint.tries, Tint.next_try = nil, {}, 0, 0
     for _, h in ipairs(Handlers.unload) do pcall(h) end
@@ -1657,8 +2296,8 @@ load_config()
 log("v%s loaded from %s | chapter %d | mode=%s name=%s host=%s:%d", VERSION, MOD_DIR, CHAPTER, Config.mode, Config.name, Config.host_ip, Config.port)
 
 -- Expose for sibling modules (doors/puzzles etc. live in separate files)
-_G.PoppyCoop = { Coop = Coop, Net = Net, Game = Game, Config = Config, log = log, valid = valid, try = try, CHAPTER = CHAPTER, load_async = load_async,
-                 Handlers = Handlers, MOD_DIR = MOD_DIR, Puppets = Puppets, Perf = Perf, game_time = function() return game_time end }
+_G.PoppyCoop = { crumb = crumb, late = late, Late = Late, Coop = Coop, Net = Net, Game = Game, Config = Config, log = log, valid = valid, try = try, CHAPTER = CHAPTER, load_async = load_async,
+                 Handlers = Handlers, MOD_DIR = MOD_DIR, Puppets = Puppets, Perf = Perf, Tint = Tint, G1A = G1A, SafeUE = SafeUE, G1_SHIFT = G1_SHIFT, M1_GRIP = M1_GRIP, G1_TIP = G1_TIP, game_time = function() return game_time end }
 for _, m in ipairs({ "coop_world", "coop_extra" }) do
     local ok, err = pcall(require, m)
     if not ok and not tostring(err):find("not found") then log("module %s: %s", m, tostring(err)) end

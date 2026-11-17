@@ -24,7 +24,12 @@ local now = P.game_time
 --   sync_physics=true / sync_huggy=true
 local Cfg = (P and P.Config) or {}
 local ENABLE_POPUPS = Cfg.popups ~= false and Cfg.popups ~= "false"
+-- Chapter 1: boxes, crates, toy blocks, chairs... are part of the puzzles and get pulled around a lot, so
+-- physics sync is on there unless config.txt says sync_physics=false
+-- (was on by default in Chapter 1 for a while: the games froze right after a player joined - suspected:
+-- moving physics bodies while Chaos simulates them. Back to opt-in until that is solved.)
 local ENABLE_PHYSICS = Cfg.sync_physics == true or Cfg.sync_physics == "true"
+    or (P.CHAPTER == 1 and Cfg.sync_physics ~= false and Cfg.sync_physics ~= "false")   -- writes run late (see motion_apply)
 local ENABLE_HUGGY = Cfg.sync_huggy == true or Cfg.sync_huggy == "true"
 
 local function fullpath(o)
@@ -157,6 +162,7 @@ local Motion = {
     their = {},          -- [player id] = { [n] = path }
 }
 local SEND_MAX = 8
+P.Motion = Motion      -- diagnostics
 -- characters synced like Huggy (Chapter 1: Huggy Wuggy; Chapter 2: Mommy Long Legs, Bunzo Bunny, PJ Pug-a-Pillar)
 local MONSTERS = { "huggy", "mommy", "longlegs", "bunzo", "pugapillar", "pug_a_pillar", "pjpug", "kissy" }
 
@@ -174,6 +180,27 @@ local function simulating(comp)
     return ok and v == true
 end
 
+local PHYS_CLASSES_CH1 = { "bb_arch_small3_Blueprint_C", "bb_cube7_Blueprint_C", "bb_rect11_Blueprint_C", "bb_tri2_Blueprint_C",
+    "box_a6_Blueprint_C", "box_b2_Blueprint_C", "box_c2_Blueprint_C", "BP_BrokenHandBox_C", "BP_Sign_EmployeesOnly_C", "BP_Stool_C",
+    "BP_ToyPart_C", "BP_Trashcan_C", "broom_Blueprint_C", "computer2_Blueprint_C", "crate_a7_Blueprint_C", "entrance_chair_Blueprint_C",
+    "huggie_box4_Blueprint_C", "officechair12_Blueprint_C", "pillow_a14_Blueprint_C", "sidetable3_Blueprint_C",
+    "toybox_a30_Blueprint_C", "toybox_b3_Blueprint_C" }
+-- where props came to rest after someone moved them: re-applied after reloads and sent to late joiners
+Motion.final = Motion.final or {}
+local function apply_final(t, v)
+    P.late(function()
+        if not t.a:IsValid() then return end
+        t.a:K2_SetActorLocationAndRotation({ X = v[1], Y = v[2], Z = v[3] }, { Pitch = v[4], Yaw = v[5], Roll = v[6] }, false, {}, true)
+        t.cur = { X = v[1], Y = v[2], Z = v[3], P = v[4], Yw = v[5], R = v[6] }
+    end, "prop final")
+end
+-- a prop whose physics WE switched off (another player is moving it) still counts as a physics prop -
+-- dropping it from the list would leave it frozen with physics off for good
+local function held(a)
+    local path = fullpath(a)
+    local t = path and Motion.tracked[path]
+    return t ~= nil and t.remote_on == true
+end
 local function scan_motion()
     Motion.scan_at = now()
     local seen = {}
@@ -182,15 +209,27 @@ local function scan_motion()
         if not path or seen[path] then return end
         seen[path] = true
         local t = Motion.tracked[path]
-        if t then t.a = a else Motion.tracked[path] = { a = a, kind = kind } end
+        if t then t.a = a else
+            t = { a = a, kind = kind }
+            Motion.tracked[path] = t
+            -- newly loaded (level reload, streamed back in): put it where it was left
+            local v = Motion.final[path]
+            if v then apply_final(t, v) end
+        end
     end
     if ENABLE_PHYSICS then
+        -- Chapter 1's movable props (also the ones only pushed, without a grab component)
+        for _, cls in ipairs(P.CHAPTER == 1 and PHYS_CLASSES_CH1 or {}) do
+            for _, a in ipairs(try(function() return FindAllOf(cls) end) or {}) do
+                if valid(a) and (simulating(try(function() return a:K2_GetRootComponent() end)) or held(a)) then add(a, "phys") end
+            end
+        end
         -- props the GrabPack can grab/pull and that are simulated by physics
         for _, c in ipairs(try(function() return FindAllOf("GrabpackGrabComponent") end) or {}) do
             local a = valid(c) and try(function() return c:GetOwner() end)
             if valid(a) then
                 local sim = simulating(a.RootComponent)
-                if sim then add(a, "phys") end
+                if sim or held(a) then add(a, "phys") end
             end
         end
     end
@@ -262,7 +301,23 @@ table.insert(Handlers.join, function(id)       -- a late joiner needs our number
     for path, n in pairs(Motion.my_ids) do Coop.send_to(id, "mvid", n .. " " .. path) end
 end)
 table.insert(Handlers.leave, function(id) Motion.their[id] = nil end)
+Coop.on("mvfin", function(from, rest)
+    local a, b, c, d, e, f, path = rest:match("^(%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (.+)$")
+    if not path or not path:find(":PersistentLevel.", 1, true) then return end
+    local v = { tonumber(a), tonumber(b), tonumber(c), tonumber(d), tonumber(e), tonumber(f) }
+    for i = 1, 6 do if not v[i] or v[i] ~= v[i] or math.abs(v[i]) > 2000000 then return end end
+    Motion.final[path] = v
+    local t = Motion.tracked[path]
+    Motion.fin_rx = (Motion.fin_rx or 0) + 1
+    if t and not t.driving then apply_final(t, v) end
+end)
+table.insert(Handlers.join, function(id)       -- late joiners: where everything was left
+    for path, v in pairs(Motion.final) do
+        Coop.send_to(id, "mvfin", ("%.1f %.1f %.1f %.1f %.1f %.1f %s"):format(v[1], v[2], v[3], v[4], v[5], v[6], path))
+    end
+end)
 
+local motion_apply           -- defined below (runs from the late queue in Chapter 1)
 local function motion_tick(dt)
     if Motion.off or not Coop.active() then return end
     if not ENABLE_PHYSICS and not ENABLE_HUGGY then return end
@@ -274,21 +329,45 @@ local function motion_tick(dt)
     local me = my_player_loc()
     -- 1) read every tracked actor; decide whether this game is driving it
     for path, t in pairs(Motion.tracked) do
-        local ok, err = pcall(function()
+        -- props out of reach are read less often (every engine call costs): > 4 m 10x, > 8 m 4x, > 25 m once
+        -- a second; a prop that moves or is being driven is read every frame
+        local far = false
+        if me and t.cur and not t.driving and not (t.remote and t_now - t.remote.t < 0.7) then
+            local d = dist(me, t.cur)
+            far = (d > 2500 and t_now - (t.read_at or 0) < 1) or (d > 800 and t_now - (t.read_at or 0) < 0.25)
+                or (d > 400 and t_now - (t.read_at or 0) < 0.1)
+        end
+        local ok, err = (far and true) or pcall(function()
+            t.read_at = t_now
             if not t.a:IsValid() then Motion.tracked[path] = nil; return end
             local l, r = t.a:K2_GetActorLocation(), t.a:K2_GetActorRotation()
             local c = { X = l.X, Y = l.Y, Z = l.Z, P = r.Pitch, Yw = r.Yaw, R = r.Roll }
             local remote = t.remote and t_now - t.remote.t < 0.7
             if not remote then
-                if t.remote_on then set_remote(t, false) end
+                if t.remote_on and not t.releasing then
+                    -- remote control ended: hand back to physics, but whatever it does in the next moments
+                    -- (settling, sliding) is not "this player moving it" - else it echoes back and forth.
+                    -- The physics switch itself runs from the late queue.
+                    t.releasing = true
+                    P.late(function() t.releasing = nil; if t.a:IsValid() then set_remote(t, false) end end, "prop release")
+                    t.quiet_until = t_now + 2.0
+                end
                 local last = t.cur
-                if last then
+                if last and t.quiet_until and t_now < t.quiet_until then
+                    last = nil
+                elseif last then
                     local moved = math.abs(c.X - last.X) + math.abs(c.Y - last.Y) + math.abs(c.Z - last.Z) > 1.5
                         or math.abs(((c.Yw - last.Yw + 540) % 360) - 180) > 1 or math.abs(c.P - last.P) > 1
                     if moved then t.moved_at = t_now end
                 end
                 -- keep sending for a second after it stops, so everyone ends on the same resting spot
+                local was = t.driving
                 t.driving = t.moved_at ~= nil and t_now - t.moved_at < 1.0
+                if was and not t.driving and t.kind == "phys" then        -- came to rest: remember + tell everyone
+                    local v = { c.X, c.Y, c.Z, c.P, c.Yw, c.R }
+                    Motion.final[path] = v
+                    Coop.send_event("mvfin", ("%.1f %.1f %.1f %.1f %.1f %.1f %s"):format(v[1], v[2], v[3], v[4], v[5], v[6], path))
+                end
             else
                 t.driving = false
             end
@@ -317,7 +396,14 @@ local function motion_tick(dt)
             end
         end
     end
-    -- 3) move remotely-driven actors smoothly toward the latest received transform
+    Motion.dt = dt
+    if P.CHAPTER ~= 1 then motion_apply() end      -- Chapter 2: no late queue, apply right here as before
+end
+-- 3) move remotely-driven actors smoothly toward the latest received transform - from the late queue
+-- (writes to physics bodies happen after the frame's simulation/animation tasks, never inside a tick)
+motion_apply = function()
+    if Motion.off or not Coop.active() or Game.loading then return end
+    local t_now, dt = now(), Motion.dt or 0.016
     for path, t in pairs(Motion.tracked) do
         local rm = t.remote
         if rm and t_now - rm.t < 0.7 and t.cur then
@@ -423,6 +509,11 @@ end
 -- opened door stays open for everyone, in the direction and at the angle it was really opened.
 local POSE_CLASSES = {
     DoorBP_C = { "Right Door Pivot", "Left Door Pivot" },
+    -- Chapter 1 doors swing around these pivots
+    DoubleDoors_C = { "LeftDoorSwingPoint", "RightDoorSwingPoint" }, SingleDoors_BP_C = { "LeftDoorSwingPoint" },
+    factorygrate_BP_C = true,
+    -- Chapter 1: bridges in the factory pulled into place with the GrabPack
+    TwoWayBridge_BP_C = true, MachineBridgeOneWay_BP_C = true,
     BP_FloorDoor_C = true, BP_PullLever_C = true, GarageLever_C = true, BP_Hub_CraneHandle_C = true,
     BP_CraneHandle_C = true, catwalk_pivot_C = true, BP_SlidingGate_C = true, PullOffVent_Office_C = true,
     PullOffVent_C = true, BP_PullOffSpiderWeb_C = true, Huggy_Grabpack_cutout_BP_C = true,
@@ -436,7 +527,7 @@ local POSE_CLASSES = {
     -- not here: gates/doors driven by power (LargeGate_Moveable, EventRaiseLowerDoors...) - their power
     -- signal is replayed, so they animate by themselves in every game; streaming them too would jitter
 }
-local Pose = { parts = {}, byKey = {}, final = {}, scan_at = -100, read_at = 0, sent = {}, off = false, errors = 0 }
+local Pose = { parts = {}, byKey = {}, final = {}, scan_at = -100, read_at = 0, sent = {}, off = false, errors = 0, alive_cache = {} }
 P.Pose = Pose      -- diagnostics
 local POSE_EPS_ROT, POSE_EPS_LOC = 0.4, 0.4
 local function pfail(where, err)
@@ -474,6 +565,23 @@ local function write_pose(e, v)
     e.last = v
 end
 
+-- Parts live in streaming levels that can be unloaded at any time (e.g. the other player's area).
+-- A cached engine object must never be touched after that (IsValid on a freed object crashes UE4SS),
+-- so before each use the part's actor is looked up fresh by its path and compared by address.
+local function addr(o) local ok, a = pcall(function() return o:GetAddress() end); return ok and a or nil end
+local function alive(e)
+    local t = now()
+    local c = Pose.alive_cache[e.apath]
+    if c and c.t == t then return c.ok end
+    local a = StaticFindObject(e.apath)
+    local exists = a ~= nil and a:IsValid()
+    local ok = exists and addr(a) == e.aaddr
+    -- the level came back (new object at the same path): rescan soon so its final pose is re-applied
+    if exists and not ok then Pose.scan_at = math.min(Pose.scan_at, t - 28) end
+    Pose.alive_cache[e.apath] = { t = t, ok = ok }
+    return ok
+end
+
 local function pose_scan()
     Pose.scan_at = now()
     local parts, byKey = {}, {}
@@ -505,11 +613,14 @@ local function pose_scan()
                     end)
                 end
                 local al = try(function() return a:K2_GetActorLocation() end)
+                local aaddr = addr(a)
                 for _, it in ipairs(comps) do
                     local key = pkey_esc(path .. "|" .. it.name)
                     local old = Pose.byKey[key]
-                    local e = { key = key, comp = it.c, actor = it.actor }
-                    if old and old.comp and valid(old.comp) and old.comp:GetAddress() == it.c:GetAddress() then e = old else
+                    local caddr = addr(it.c)
+                    local e = { key = key, comp = it.c, actor = it.actor, apath = path, aaddr = aaddr, caddr = caddr }
+                    -- reuse the old entry only if it is the very same object (compared by address, never touched)
+                    if old and old.caddr and old.caddr == caddr and old.aaddr == aaddr then e = old else
                         local ok, v = pcall(read_pose, it.c, it.actor)
                         e.last = ok and v or nil
                     end
@@ -536,7 +647,7 @@ local function pose_tick(dt)
     end
     -- remote targets: ease towards them every frame
     for _, e in ipairs(Pose.parts) do
-        if e.target and e.remote_until and t < e.remote_until and valid(e.comp) then
+        if e.target and e.remote_until and t < e.remote_until and alive(e) then
             local cur, tg = e.last or e.target, e.target
             local k = math.min(1, dt * 15)
             local v = {}
@@ -558,7 +669,7 @@ local function pose_tick(dt)
             local dx, dy, dz = e.pos[1] - me.X, e.pos[2] - me.Y, e.pos[3] - me.Z
             near = dx * dx + dy * dy + dz * dz < 2500 * 2500
         end
-        if (near or slow or e.moving) and valid(e.comp) and not (e.remote_until and t < e.remote_until) then
+        if (near or slow or e.moving) and not (e.remote_until and t < e.remote_until) and alive(e) then
             local ok, v = pcall(read_pose, e.comp, e.actor)
             if ok then
                 if pose_diff(v, e.last) then
@@ -602,7 +713,122 @@ table.insert(Handlers.join, function(id)
         Coop.send_to(id, "pose", ("%s %.2f %.2f %.2f %.1f %.1f %.1f 1"):format(key, v[1], v[2], v[3], v[4], v[5], v[6]))
     end
 end)
-table.insert(Handlers.unload, function() Pose.parts, Pose.byKey, Pose.scan_at = {}, {}, -100 end)
+table.insert(Handlers.unload, function() Pose.parts, Pose.byKey, Pose.scan_at, Pose.alive_cache = {}, {}, -100, {} end)
+
+------------------------------------------------------------------ animation sync (Chapter 1 bridges)
+-- Some pullable things are animated skeletal meshes: pulling plays an animation (the catwalks in the
+-- Make-A-Friend factory). Their transforms never change, so pose sync can't see them. Instead the
+-- animation asset and its position are synced (live while it plays, and the final position).
+local ANIM_SYNC = { TwoWayBridge_BP_C = { "SkeletalMesh_Bridge" }, MachineBridgeOneWay_BP_C = { "SkeletalMesh" } }
+local Anim = { parts = {}, byKey = {}, final = {}, scan_at = -100, read_at = 0 }
+P.Anim = Anim      -- diagnostics
+local function anim_read(c)
+    local si = c.AnimScriptInstance
+    local asset = si and si:GetAddress() ~= 0 and si.CurrentAsset
+    local ap = (asset and asset:GetAddress() ~= 0) and fullpath(asset) or ""
+    return { ap, c:GetPosition() }
+end
+local function anim_scan()
+    Anim.scan_at = now()
+    local parts, byKey = {}, {}
+    for cls, props in pairs(ANIM_SYNC) do
+        for _, a in ipairs(FindAllOf(cls) or {}) do
+            local path = valid(a) and fullpath(a)
+            if level_placed(path) then
+                for _, prop in ipairs(props) do
+                    local c = try(function() return a[prop] end)
+                    if valid(c) then
+                        local key = pkey_esc(path .. "|" .. prop)
+                        local e = Anim.byKey[key]
+                        local caddr = addr(c)
+                        if not (e and e.caddr == caddr) then
+                            e = { key = key, comp = c, apath = path, aaddr = addr(a), caddr = caddr }
+                            local ok, v = pcall(anim_read, c)
+                            e.last = ok and v or nil
+                        end
+                        parts[#parts + 1] = e
+                        byKey[key] = e
+                    end
+                end
+            end
+        end
+    end
+    Anim.parts, Anim.byKey = parts, byKey
+end
+local function anim_apply(e, asset, pos)
+    local c = e.comp
+    if not e.last or e.last[1] ~= asset then
+        local obj = StaticFindObject(asset)
+        if not (obj and obj:IsValid()) then return end
+        c:PlayAnimation(obj, false)
+    end
+    c:SetPosition(pos, false)
+    -- no Stop(): stopping the bridge animation froze both games once; it plays on to its end like the sender's
+    e.last = { asset, pos }
+    e.remote_until = now() + 0.6
+end
+local function anim_tick()
+    if Pose.off or not Coop.active() then return end
+    local t = now()
+    if t - Anim.scan_at > 30 then
+        local ok, err = pcall(anim_scan)
+        if not ok then pfail("anim scan", err) end
+    end
+    if t - Anim.read_at < 0.15 then return end
+    Anim.read_at = t
+    for _, e in ipairs(Anim.parts) do
+        if not (e.remote_until and t < e.remote_until) and alive(e) then
+            local ok, v = pcall(anim_read, e.comp)
+            if ok and v[1] ~= "" then
+                local last = e.last
+                if not last or last[1] ~= v[1] or math.abs(last[2] - v[2]) > 0.01 then
+                    e.last, e.moved_at, e.moving = v, t, true
+                    Coop.send_event("apose", ("%s 0 %.4f %s"):format(e.key, v[2], v[1]))
+                elseif e.moving and t - (e.moved_at or 0) > 0.6 then
+                    e.moving = false
+                    Anim.final[e.key] = v
+                    Coop.send_event("apose", ("%s 1 %.4f %s"):format(e.key, v[2], v[1]))
+                elseif not e.moving then
+                    local fv = Anim.final[e.key]          -- after a reload: back to where it was left
+                    if fv and (fv[1] ~= v[1] or math.abs(fv[2] - v[2]) > 0.01) then
+                        e.remote_until = t + 0.6
+                        pcall(anim_apply, e, fv[1], fv[2])
+                    end
+                end
+            end
+        end
+    end
+end
+Coop.on("apose", function(from, rest)
+    local key, fin, pos, asset = rest:match("^(%S+) (%d) (%S+) (%S+)$")
+    pos = tonumber(pos)
+    if not key or not pos or pos ~= pos or pos < 0 or pos > 1000 or not asset:find("^/Game/") then return end
+    if fin == "1" then Anim.final[key] = { asset, pos } end
+    local e = Anim.byKey[key]
+    if e and alive(e) then
+        -- animation calls only from the late queue (main.lua Late: after the frame's animation tasks)
+        P.late(function()
+            if not alive(e) then return end
+            local ok, err = pcall(anim_apply, e, asset, pos)
+            if not ok then pfail("anim apply", err) end
+        end, "anim apply")
+        e.moving = false
+    end
+end)
+table.insert(Handlers.join, function(id)
+    for key, v in pairs(Anim.final) do Coop.send_to(id, "apose", ("%s 1 %.4f %s"):format(key, v[2], v[1])) end
+end)
+table.insert(Handlers.unload, function() Anim.parts, Anim.byKey, Anim.scan_at = {}, {}, -100 end)
+-- physics props moved by other players: late queue only
+if P.Late then table.insert(P.Late.every, { function() motion_apply() end, "motion_apply" }) end
+-- reading/applying bridge animation: late queue only (never inside an actor tick)
+if P.CHAPTER == 1 and P.Late then
+    table.insert(P.Late.every, { function()
+        if not Coop.active() or not Game.pawn or Game.loading then return end
+        local ok, err = pcall(anim_tick)
+        if not ok then pfail("anim", err) end
+    end, "anim_tick" })
+end
 
 ------------------------------------------------------------------ wiring
 -- Alone in a room for a while: the usual reason is a different code or a different chapter (rooms are
@@ -621,10 +847,16 @@ end
 
 table.insert(Handlers.tick, function(dt, have)
     if not have then return end
-    popups_tick()
-    pcall(alone_tick)
-    motion_tick(dt)
-    if P.CHAPTER == 2 then pose_tick(dt) end
+    local crumb = P.crumb or function() end
+    crumb("extra: popups"); popups_tick()
+    crumb("extra: alone"); pcall(alone_tick)
+    crumb("extra: motion"); motion_tick(dt)
+    crumb("extra: pose"); pose_tick(dt)
+    crumb("extra: done")
+    -- bridges are skeletal meshes animated in parallel worker tasks: reading/setting their animation
+    -- inside the player's tick waited on those tasks and froze the game (seen in a debugger). Run it at
+    -- UE4SS's game-thread point instead (outside any actor tick), at most one job queued at a time.
+    -- (bridge animation sync runs from the late queue, see below / main.lua Late)
 end)
 table.insert(Handlers.unload, function()
     -- the level is going away: forget every engine object
@@ -719,6 +951,7 @@ local function run_exec()
     local env = setmetatable({ P = P, Game = Game, log = log, try = try, valid = valid,
         out = function(...) local t = {} for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end out[#out + 1] = table.concat(t, "\t") end },
         { __index = _G })
+    if P.crumb then P.crumb("dev exec: " .. code:gsub("%s+", " "):sub(1, 70)) end
     local chunk, err = load(code, "exec", "t", env)
     local res
     if chunk then local ok, r = pcall(chunk); res = (ok and "OK " or "ERROR ") .. tostring(r) else res = "COMPILE " .. tostring(err) end
@@ -757,8 +990,14 @@ local function dev_exec_enabled()
 end
 if dev_exec_enabled() then
     LoopAsync(1000, function()
+        -- in game the tick runs the exec file; queueing a job every second as well put Lua on UE4SS's
+        -- ExecuteInGameThread queue all the time (suspected in the freezes) - menu only now
+        if Game.pawn ~= nil or (P.game_time and P.game_time() > 0 and Game.map ~= "?" and Game.map ~= "MainMenu") then return false end
         ExecuteInGameThread(function()
-            if not (Game.pawn and valid(Game.pawn)) then pcall(run_exec) end
+            -- never touch cached objects here: during a level change they are already freed
+            -- (IsValid on a freed object crashes UE4SS). The exec file is consumed once, so running
+            -- it from here and from the game tick is harmless.
+            pcall(run_exec)
         end)
         return false
     end)
