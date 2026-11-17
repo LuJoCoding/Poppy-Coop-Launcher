@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **`PoppyCoop_Launcher_x.x.x_CH2.zip`** from this repository (or from Releases), unzip it,
-and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.3.3_CH2.zip`](Upload%20to%20GitHub%20-%201.3.3/PoppyCoop_Launcher_1.3.3_CH2.zip)**
+(folder `Upload to GitHub - 1.3.3`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**.
@@ -28,7 +28,7 @@ Everyone needs the **same launcher version**, or the mods won't match.
 
 | Key | What it does |
 | --- | --- |
-| **F6** | Teleport to your friend (if someone is stuck or far behind) |
+| **F6** | Teleport to another player (if someone is stuck or far behind; with 3+ players each press goes to the next one) |
 | **F7** | Buddy figure that follows you (solo testing / clips) |
 | **O / P** | Record your movement / replay it as a second player (trailer clips) |
 | **F10** | Console. Type `coop_status` to see your room and who's connected |
@@ -47,11 +47,18 @@ inventory, checkpoints, deaths and which parts of the factory are loaded.
 wooden walls, cut-outs and carts; puzzle pieces (furnace doors, gears, molds, paint cartridges, garage levers);
 power, switches, keys, items and checkpoints. Some minigames and chases are not shared yet.
 
+**2, 3 or more players** can share a room. Checkpoints only move forward: a player who is behind can't reset
+everyone else's "Load Game" position.
+
+Rooms are public, so the mod only accepts the actions it sends itself from other players (power, switches,
+puzzle steps, inventory, item pickups, moving parts with sane values). Anything else is dropped.
+
 ## Troubleshooting
 
 - **Can't see anyone:** press F10 and type `coop_status`.
   - `helper=down`: `PoppyCoopNet.exe` is blocked or was removed by an antivirus. Restore it, allow it, and press PLAY again.
   - Different room: check that the code matches exactly. Copy and paste it instead of typing it.
+  - Different chapter: rooms are per chapter, so everyone must pick the same chapter in the launcher.
 - **"Servers unreachable":** the free servers have a daily limit. It resets at 01:00 Irish time.
 - **Uninstall:** click *Uninstall* in the launcher. The game goes back to normal.
 
@@ -65,6 +72,15 @@ power, switches, keys, items and checkpoints. Some minigames and chases are not 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.3.3
+- Merge of both 1.3.2 lines (keybinds.txt / dev tools opt-in / 30 s scan + the changes below).
+- 3+ players: checkpoints only move forward; the teleport key cycles through all players.
+- Public rooms: incoming events are whitelisted, moving-part values are range-checked.
+- Rooms are per chapter (a Chapter 2 code in Chapter 1 opens an empty Chapter 1 room). If you're alone in a
+  room for 45 s, the game now tells you to check the code and the chapter.
+- Chapter 2 figures: hands sit on the launcher tubes, palms forward; launched hands start at the launcher
+  (they used to start at the figure's feet); the cable comes out of the tube.
 
 ### 1.3.2
 - Keys can be changed in `keybinds.txt` (teleport, buddy, record, play). A launcher Customisation tab is planned once the launcher source is in the repo.
@@ -83,4 +99,3 @@ power, switches, keys, items and checkpoints. Some minigames and chases are not 
 ### 1.1.0
 - Fixed 0 fps freezes and crashes (no more full material scans or class dumps). Player colours use one tinted
   toy paint instead of random materials. Huggy and physics sync are off by default (Huggy keeps his chase animation).
-
