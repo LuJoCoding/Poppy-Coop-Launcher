@@ -1,0 +1,42 @@
+POPPY PLAYTIME CO-OP - LAUNCHER 1.3.3 (mit Chapter 2)
+=====================================================
+
+Inoffizielle Version des PoppyCoop-Launchers 2.0 (Fan-Mod, nicht von Mob Entertainment).
+Neu gegenüber dem Original:
+- Chapter 2 ist im Launcher spielbar (Beta).
+- Echte Spielerfiguren in Chapter 2: Ganzkörperfigur mit GrabPack (Rucksack, Werfer, Hände),
+  Animationen für Stehen, Gehen, Rennen, Ducken, Springen; abgeschossene Hände fliegen mit
+  schwarzem Kabel dorthin, wo der Mitspieler hinschießt; grüne Hand ist an der Figur grün.
+- Grüne Hand wird geteilt: Hat einer sie, bekommen alle sie.
+- Türen, Bodenluken, Hebel, Kran-Griffe, Lüftungsgitter, Spinnennetze, Holzwände, Pappfiguren,
+  Wagen usw. bewegen sich beim Mitspieler genau mit und bleiben nach dem Neuladen so.
+- Rätselteile (Ofentüren, Zahnräder, Formen, Farbkartuschen, Garagenhebel) werden geteilt.
+- Strom, Schalter, Schlüssel, Gegenstände und Checkpoints werden geteilt
+  ("Load Game" bringt jeden zum weitesten Checkpoint).
+- Für 2, 3 oder mehr Spieler: alle treten demselben Raum bei.
+- F6: zu einem Mitspieler teleportieren (bei mehreren springt jeder Druck zum nächsten).
+  Tasten änderbar in ue4ss/Mods/PoppyCoop/keybinds.txt (F8/F9 bleiben frei für andere Mods).
+- Absturz beim Neuladen eines Checkpoints behoben.
+- Launcher läuft deutlich flüssiger.
+
+Installation (Windows)
+----------------------
+1. ZIP entpacken, PoppyCoopLauncher.exe starten.
+   Windows meldet evtl. "Der Computer wurde durch Windows geschützt" (die EXE ist nicht signiert):
+   "Weitere Informationen" -> "Trotzdem ausführen".
+2. Beim ersten Start: Spielordner wählen, Name und Farbe einstellen, Mod installieren.
+   Chapter 2: links "Chapter 2" anklicken. Den Ordner findet der Launcher meist selbst, sonst
+   Steam -> Rechtsklick "Poppy Playtime - Chapter 2" -> Verwalten -> Lokale Dateien durchsuchen.
+3. Wer eine ältere Version schon benutzt hat: einfach diesen starten und PLAY drücken,
+   der Mod wird automatisch auf 1.3.3 aktualisiert.
+
+Zusammen spielen
+----------------
+- Einer drückt "Create Game" und schickt den Raumcode, alle anderen "Join Game" und geben ihn ein.
+- Alle laden im Spiel DENSELBEN Checkpoint (Play -> Load Game).
+- Alle brauchen diese Launcher-Version (1.3.3), sonst passen die Mods nicht zusammen.
+- Firewall-Frage zu PoppyCoopNet.exe: "Zulassen".
+- F6 = zu einem Mitspieler teleportieren (reihum), F7 = Begleitfigur, O/P = Bewegung aufnehmen/abspielen.
+- Checkpoints gehen nur vorwärts: wer hinterher ist, setzt die anderen nicht zurück.
+- Den Raumcode nur an Leute geben, mit denen ihr spielen wollt.
+- Im Spiel F10 und "coop_status" eintippen zeigt Raum und Mitspieler.
