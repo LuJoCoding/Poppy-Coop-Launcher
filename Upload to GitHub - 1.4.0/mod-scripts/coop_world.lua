@@ -1125,6 +1125,7 @@ local function scan_slots()
             end
             s.obj, s.last_load = ls, load
             s.vis = try(function() return ls:IsLevelVisible() end) and true or false
+            s.vis_want = try(function() return ls.bShouldBeVisible end) ~= false   -- the game may hide a loaded area
             local pkg = slot_pkg(ls)
             if pkg then s.pkg = pkg end
             if loaded and not s.was_loaded and s.pkg then LevelReplayAt[s.pkg] = now + 1.0 end
@@ -1139,7 +1140,11 @@ end
 
 local function report_levels(force)
     local mine = {}
-    for n, s in pairs(Slots) do if s.want then mine[#mine + 1] = n .. "=" .. (s.pkg or "?") end end
+    -- only areas our game wants SHOWN (a loaded-but-hidden area isn't needed; one we only show for a
+    -- friend must not be reported back, or both games would keep it forever)
+    for n, s in pairs(Slots) do
+        if s.want and s.vis_want and not s.vis_forced then mine[#mine + 1] = n .. "=" .. (s.pkg or "?") end
+    end
     table.sort(mine)
     local str = #mine > 0 and table.concat(mine, ",") or "-"
     if (force or str ~= my_levels_str) and Coop.active() then
@@ -1192,6 +1197,25 @@ local function sync_levels()
             log("loading %s (%s) for the other player", n, need[n])
         elseif need[n] and Ours[n] and s.last_load and not s.vis and valid(s.obj) then
             pcall(function() s.obj:SetShouldBeVisible(true) end)
+        elseif need[n] and not Ours[n] and s.last_load and not s.vis_want and valid(s.obj) then
+            -- our game hid this area (walked past a visibility trigger) but a friend is in it: an
+            -- invisible area has no floor, so teleporting there (F6) dropped players out of the map
+            pcall(function() s.obj:SetShouldBeVisible(true) end)
+            s.vis_forced = true
+            log("showing %s (%s) again for the other player", n, need[n])
+        elseif not need[n] and not Ours[n] and s.vis_forced and s.last_load and valid(s.obj) then
+            local now = P.game_time()
+            s.unshown_since = s.unshown_since or now
+            if now - s.unshown_since >= 10 then
+                if standing == nil then standing = floor_pkg() or false end
+                if standing ~= false and s.pkg == standing then
+                    s.vis_forced, s.unshown_since = nil, nil          -- we walked in: it's ours now
+                elseif standing ~= false then
+                    pcall(function() s.obj:SetShouldBeVisible(false) end)
+                    s.vis_forced, s.unshown_since = nil, nil
+                    log("hiding %s (%s) again: nobody needs it", n, tostring(s.pkg))
+                end
+            end
         elseif not need[n] and Ours[n] and not s.want and s.last_load then
             local now = P.game_time()
             s.unneeded_since = s.unneeded_since or now
@@ -1209,7 +1233,35 @@ local function sync_levels()
             end
         end
         if need[n] or not Ours[n] then s.unneeded_since = nil end
+        if need[n] then s.unshown_since = nil end
     end
+end
+
+-- Teleport (F6) preparation: load and show every area the friend's game has shown, so the teleport
+-- lands on a floor. Returns ready, number of areas still loading. Called each tick until ready.
+P.level_prep = function(id)
+    scan_slots()
+    local set = remote_levels[id]
+    if not set then return true, 0 end
+    local pending, waiting = 0, {}
+    for slot, pkg in pairs(set) do
+        local n = resolve_slot(slot, pkg)
+        local s = n and Slots[n]
+        if s and valid(s.obj) then
+            if not s.last_load then
+                set_slot(n, true); Ours[n] = true
+                log("loading %s (%s) for the teleport", n, pkg)
+            elseif not s.vis_want and not Ours[n] then
+                pcall(function() s.obj:SetShouldBeVisible(true) end)
+                s.vis_forced = true
+            end
+            -- only wait for the main areas: sub-areas inside a streamed area (RevokedToys_CHP2:LevelStreaming...)
+            -- may never appear here (parent not shown, or the other game's copy differs)
+            local top = n:match("^([%w_]+):") == Game.map
+            if not s.vis and top then pending = pending + 1; waiting[#waiting + 1] = n .. "(" .. tostring(s.pkg or pkg) .. ")" end
+        end
+    end
+    return pending == 0, pending, table.concat(waiting, " ")
 end
 
 ------------------------------------------------------------ diagnostics

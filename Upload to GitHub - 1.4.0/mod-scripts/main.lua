@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.3.6"   -- 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.4.0"   -- 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -835,6 +835,7 @@ local F2 = {
     cable = "/Engine/BasicShapes/Cylinder.Cylinder",
 }
 local F2_ANIM_DIR = "/Game/Assets/Characters/TrainingDummy/Animations/"
+local F2_CROUCH_DROP = 56          -- see f2_update: crouch animations lift the dummy's feet
 local F2_ANIMS = { idle = "A_DummyIdle", walk = "A_Dummy_Walk_rig_rigAction", run = "A_Dummy_Run_rig_rigAction",
     cidle = "A_Dummy_CrouchIdle", cwalk = "A_Dummy_CrouchForward_rig_rigAction", air = "A_Dummy_InAir", down = "A_Down_rig_DownIdle" }
 -- attachments relative to the rig's bones (the rig's bones carry a x14.7 scale). The rig's mesh faces
@@ -1050,7 +1051,10 @@ local function f2_update(p, st, c, dt, crouch, dead)
     elseif spd > 30 then f2_play(f, "walk", math.max(0.5, math.min(1.6, spd / 160)))
     else f2_play(f, "idle", 1) end
     pcall(function()
-        f.body:K2_SetActorLocationAndRotation({ X = c.x, Y = c.y, Z = c.z - 88 }, { Pitch = 0, Yaw = c.yaw - 90, Roll = 0 }, false, {}, true)
+        -- the dummy's crouch animations lift the feet ~56 cm off the root (measured: ankles at 63-65 instead of
+        -- 8) - lower the figure while they play, or a crouching player floats
+        local lower = (f.anim == "cidle" or f.anim == "cwalk") and F2_CROUCH_DROP or 0
+        f.body:K2_SetActorLocationAndRotation({ X = c.x, Y = c.y, Z = c.z - 88 - lower }, { Pitch = 0, Yaw = c.yaw - 90, Roll = 0 }, false, {}, true)
     end)
     -- hands: attached to the launchers until one flies; then it travels to the sent position
     for _, tag in ipairs({ "L", "R" }) do
@@ -1957,27 +1961,82 @@ end
 -- Teleport key (default F6, see keybinds.txt): go to a friend (handy when someone is stuck or far behind).
 -- With 3+ players every press
 -- goes to the next one.
-local TpReq = false
+local TpReq = false        -- true, or a player name (console: coop_tp <name>)
 local TpLast = nil
-local function teleport_to_friend()
+local Tp = nil            -- running teleport: { id, name, phase = "load"|"guard", t0, t1, z, tries }
+local TP_LOAD_WAIT = 10   -- s: longest wait for the friend's area to load before teleporting anyway
+local TP_GUARD = 5        -- s: after the teleport, watch for a fall through a missing floor
+local TP_FALL = 600       -- cm below the friend = falling out of the map
+
+local function tp_say(msg)
+    log("%s", msg)
+    local P2 = _G.PoppyCoop
+    if P2 and P2.popup then pcall(P2.popup, msg) end
+end
+
+local function tp_target(id)
+    local pl = Net.players[id]
+    local st = pl and pl.state and parse_state(pl.state)
+    if st and st.map == Game.map and (st.flags & 16) == 0 then return st, pl end
+end
+
+local function tp_place(st)
     local pawn = Game.pawn
     if not valid(pawn) then return end
-    local P2 = _G.PoppyCoop
-    local function say(msg) log("%s", msg); if P2 and P2.popup then pcall(P2.popup, msg) end end
+    pcall(function() pawn:K2_SetActorLocation({ X = st.x - 60, Y = st.y, Z = st.z + 30 }, false, {}, true) end)
+    pcall(function() pawn.CharacterMovement.Velocity = { X = 0, Y = 0, Z = 0 } end)
+end
+
+-- Start a teleport: pick the friend, then tp_tick loads their area first and teleports when it's there.
+local function teleport_to_friend(want)
+    if not valid(Game.pawn) then return end
     local ids = {}
     for id, pl in pairs(Net.players) do
-        local st = pl.state and parse_state(pl.state)
-        if st and id ~= BUDDY_ID and id ~= PLAY_ID and st.map == Game.map and (st.flags & 16) == 0 then ids[#ids + 1] = id end
+        local name_ok = type(want) ~= "string" or (pl.name or ""):lower() == want:lower()
+        if id ~= BUDDY_ID and id ~= PLAY_ID and name_ok and tp_target(id) then ids[#ids + 1] = id end
     end
-    if #ids == 0 then say("Nobody to teleport to (others are dead, loading or in another map)") return end
+    if #ids == 0 then
+        tp_say(type(want) == "string" and ("No player named " .. want .. " to teleport to")
+            or "Nobody to teleport to (others are dead, loading or in another map)")
+        return
+    end
     table.sort(ids)
     local pick = ids[1]
     if TpLast then for _, id in ipairs(ids) do if id > TpLast then pick = id; break end end end
     TpLast = pick
-    local pl = Net.players[pick]
-    local st = parse_state(pl.state)
-    pcall(function() pawn:K2_SetActorLocation({ X = st.x - 60, Y = st.y, Z = st.z + 30 }, false, {}, true) end)
-    say("Teleported to " .. (pl.name or ("player " .. pick)))
+    local name = Net.players[pick].name or ("player " .. pick)
+    Tp = { id = pick, name = name, phase = "load", t0 = game_time, tries = 0 }
+    tp_say("Loading " .. name .. "'s area...")
+end
+
+local function tp_tick()
+    if not Tp then return end
+    local st = tp_target(Tp.id)
+    if not st or not valid(Game.pawn) then tp_say("Teleport cancelled"); Tp = nil; return end
+    local P2 = _G.PoppyCoop
+    if Tp.phase == "load" then
+        local ready, pending, which = true, 0, ""
+        if P2 and P2.level_prep then
+            local ok, r, n, w = pcall(P2.level_prep, Tp.id)
+            if ok then ready, pending, which = r, n, w else log("teleport: level_prep error %s", tostring(r)) end
+        end
+        if not ready and game_time - Tp.t0 < TP_LOAD_WAIT then return end
+        if not ready then log("teleport: %d area(s) still loading, teleporting anyway: %s", pending, tostring(which)) end
+        tp_place(st)
+        Tp.phase, Tp.t1, Tp.z = "guard", game_time, st.z
+        if Tp.tries == 0 then tp_say("Teleported to " .. Tp.name) end
+        return
+    end
+    -- guard: falling far below the friend means the floor wasn't there yet - put us back on it
+    local z = try(function() return Game.pawn:K2_GetActorLocation().Z end)
+    if z and z < Tp.z - TP_FALL and Tp.tries < 3 then
+        Tp.tries = Tp.tries + 1
+        log("teleport: fell through (z %.0f vs %.0f), placing again (%d)", z, Tp.z, Tp.tries)
+        tp_place(st)
+        Tp.phase, Tp.t0 = "load", game_time - TP_LOAD_WAIT + 1.5   -- short re-check, then place again
+        return
+    end
+    if game_time - Tp.t1 > TP_GUARD then Tp = nil end
 end
 -- Keys come from ue4ss\Mods\PoppyCoop\keybinds.txt (written with the defaults on first run).
 -- Names are UE4SS key names: F1..F12, A..Z, ONE..NINE, NUM_ZERO..NUM_NINE, INS, HOME, END, PAGE_UP ...
@@ -2052,7 +2111,8 @@ local function tick(dt)
     if have then update_puppets(dt) end
     crumb("after update_puppets")
     Perf.sec.figures = (Perf.sec.figures or 0) + os.clock() - c0
-    if TpReq then TpReq = false; if have then pcall(teleport_to_friend) end end
+    if TpReq then local w = TpReq; TpReq = false; if have then pcall(teleport_to_friend, w) end end
+    if Tp and have then local ok, err = pcall(tp_tick); if not ok then log("teleport error: %s", tostring(err)); Tp = nil end end
     for i, h in ipairs(Handlers.tick) do
         crumb("module tick " .. i)
         local c1 = os.clock()
@@ -2221,19 +2281,11 @@ RegisterConsoleCommandHandler("coop_join", function(full, params, out)
     reply(out, ("joining %s room '%s' as %s"):format(shown, Config.room, Config.name)); return true
 end)
 RegisterConsoleCommandHandler("coop_tp", function(full, params, out)
-    -- teleport to a friend: coop_tp [name]   (first other player if no name)
+    -- teleport to a friend: coop_tp [name]   (next other player if no name); loads their area first
     local want = tostring(full or ""):match("^%S+%s+(%S+)")
-    local pawn = Game.pawn
-    if not valid(pawn) then reply(out, "not in game"); return true end
-    for id, pl in pairs(Net.players) do
-        local st = pl.state and parse_state(pl.state)
-        if st and (not want or (pl.name or ""):lower() == want:lower()) then
-            if st.map ~= Game.map then reply(out, (pl.name or "?") .. " is in a different map"); return true end
-            pcall(function() pawn:K2_SetActorLocation({ X = st.x - 60, Y = st.y, Z = st.z + 30 }, false, {}, true) end)
-            reply(out, "teleported to " .. (pl.name or ("player " .. id))); return true
-        end
-    end
-    reply(out, want and ("no player named " .. want) or "nobody to teleport to")
+    if not valid(Game.pawn) then reply(out, "not in game"); return true end
+    TpReq = want or true
+    reply(out, "teleport requested")
     return true
 end)
 

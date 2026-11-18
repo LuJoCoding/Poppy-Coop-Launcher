@@ -7,35 +7,49 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.3.6.zip`** from this folder (or from Releases), unzip it,
+Download **`PoppyCoop_Launcher_1.4.0.zip`** from this folder (or from Releases), unzip it,
 and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
-click **More info → Run anyway**.
+click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
 
 ## How to play
 
-1. On first start, pick your game folder, a name and a colour. The launcher installs the mod for you.
-2. Pick **Chapter 1** or **Chapter 2** on the left.
-3. One player presses **Create Game** and sends the room code. The others press **Join Game** and paste it.
-   Or everyone presses **Quick Play** to join the public lobby.
-4. In the game, everyone loads the **same checkpoint** (Play → Load Game).
-5. If Windows Firewall asks about `PoppyCoopNet.exe`, click **Allow**.
+1. Start the launcher and **click the chapter** you want to play. Only then it sets that chapter up - you
+   don't need Chapter 1 to play Chapter 2.
+2. The launcher finds the game by itself (Steam libraries, and Steam's download folder where a version
+   downgraded with the Steam console always lands). If it can't find it, it says so and you pick the folder.
+3. Enter your name, pick a colour and press **Install co-op mod**.
+4. One player presses **Create Game** and sends the room code (or the invite). The others press **Join Game**
+   and paste it. Or everyone uses **Quick Play** for the public lobby.
+5. Press **PLAY**. In the game everyone loads the **same checkpoint** (Play → Load Game).
+6. If Windows Firewall asks about `PoppyCoopNet.exe`, click **Allow**.
 
-Everyone needs the **same launcher version**, or the mods won't match.
+Everyone needs the **same launcher version**, or the mods won't match. Older installs are updated
+automatically when you press PLAY.
 
-### Keys
+### Settings
+
+- **Chapter settings** (button at the top right of a chapter): change the keys (click, then press the new key)
+  and switch what is shared - doors & puzzles, picked-up items, inventory, GrabPack hands, pullable objects,
+  loaded areas, minigames (Chapter 2), on-screen messages. Everyone in a room should use the same switches.
+  Reinstall, uninstall, change or open the game folder here too.
+- **Server** (card at the bottom left): the free PoppyCoop relay (default), **Host on this PC**, or your own
+  entries (a friend's IP who hosts, or another relay). Every server shows how good the connection is: signal
+  bars, ping, jitter and packet loss. Everyone you play with has to pick the same server.
+  Hosting needs UDP port 27777 forwarded in your router and a real public IPv4 address (not DS-Lite).
+- **Launcher settings** (bottom left): theme (Dark / Midnight / Light), accent colour, animations on/off.
+
+### Keys (default)
 
 | Key | What it does |
 | --- | --- |
-| **F6** | Teleport to another player (if someone is stuck or far behind; with 3+ players each press goes to the next one) |
+| **F6** | Teleport to another player (loads their area first, so you don't fall out of the map; with 3+ players each press goes to the next one) |
 | **F7** | Buddy figure that follows you (solo testing / clips) |
 | **O / P** | Record your movement / replay it as a second player (trailer clips) |
 | **F10** | Console. Type `coop_status` to see your room and who's connected |
 
-F8 and F9 are intentionally left free for other mods.
-
-You can change these keys in `ue4ss/Mods/PoppyCoop/keybinds.txt` (created the first time you play): change a key, save, restart the game. Key names are UE4SS names such as `F6`, `G`, `NUM_ONE`, `HOME`.
+Change them in the launcher (chapter settings). F8 and F9 are intentionally left free for other mods.
 
 ## What's shared
 
@@ -46,13 +60,16 @@ the real game hands with the same angle and grab state (holding on = closed hand
 boxes, toy blocks, chairs and other physics props (while moved and where they were left); the pull platforms
 in the factory; which parts of the factory are loaded.
 
-**Chapter 2 (beta):** full player figures with GrabPack and animations; launched hands with cable; the green hand
-(if one player has it, everyone gets it); doors, floor hatches, levers, crane handles, vents, spider webs,
-wooden walls, cut-outs and carts; puzzle pieces (furnace doors, gears, molds, paint cartridges, garage levers);
-power, switches, keys, items and checkpoints. Some minigames and chases are not shared yet.
+**Chapter 2 (beta):** full player figures with GrabPack and animations (crouching figures stay on the floor);
+launched hands with cable; the green hand (if one player has it, everyone gets it); doors, floor hatches,
+levers, crane handles, vents, spider webs, wooden walls, cut-outs and carts; puzzle pieces (furnace doors,
+gears, molds, paint cartridges, garage levers); power, switches, keys, items and checkpoints; **everything the
+GrabPack can pull** (barrels, buckets, boxes, bins, ladders, toy blocks, toy boxes, chairs, the train handle...);
+**minigames**: Musical Memory - whoever wins, wins for everyone; Whack-a-Wuggy - played together, everyone's
+hits add up. Statues is an escape and stays per player.
 
 **2, 3 or more players** can share a room. Checkpoints only move forward: a player who is behind can't reset
-everyone else's "Load Game" position.
+everyone else's "Load Game" position. Areas a friend is in stay loaded for you.
 
 Rooms are public, so the mod only accepts the actions it sends itself from other players (power, switches,
 puzzle steps, inventory, item pickups, moving parts with sane values). Anything else is dropped.
@@ -62,13 +79,16 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - **Can't see anyone:** press F10 and type `coop_status`.
   - `helper=down`: `PoppyCoopNet.exe` is blocked or was removed by an antivirus. Restore it, allow it, and press PLAY again.
   - Different room: check that the code matches exactly. Copy and paste it instead of typing it.
-  - Different chapter: rooms are per chapter, so everyone must pick the same chapter in the launcher.
-- **"Servers unreachable":** the free servers have a daily limit. It resets at 01:00 Irish time.
-- **Uninstall:** click *Uninstall* in the launcher. The game goes back to normal.
+  - Different chapter or server: everyone must pick the same chapter and the same server in the launcher.
+- **Server card shows "No connection":** the free relay has a daily limit. It resets at 01:00 Irish time.
+- **Uninstall:** chapter settings → *Uninstall*. The game goes back to normal.
 
 ## For developers
 
-- The mod is Lua for UE4SS 3.0.1 (`ue4ss/Mods/PoppyCoop/Scripts`). The launcher embeds these scripts and installs them.
+- The mod is Lua for UE4SS 3.0.1 (`ue4ss/Mods/PoppyCoop/Scripts`, see `mod-scripts/`). The launcher embeds these
+  scripts and installs them.
+- The launcher is in `launcher-source/` (C++, Win32 + GDI, built with mingw-w64; see its README). UE4SS, its
+  loader and `PoppyCoopNet.exe` are taken from the original launcher 2.0 (`extract_res.py`).
 - Developer tools are **off** for players. Turn them on by creating these files in `ue4ss/Mods/PoppyCoop/`:
   - `dev_exec_on.txt`: deep dumps (`dump_now.txt`) and running Lua from `exec_now.txt`.
   - `perf_on.txt`: performance report every 15 s (`perf_<name>.txt`).
@@ -80,6 +100,25 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.4.0
+- **New launcher (Launcher 3.0)**, written from scratch (source in `launcher-source/`):
+  - A chapter is only set up when you click it - no Chapter 1 folder needed for Chapter 2. Welcome page on
+    the first start.
+  - Automatic game search, including Steam's download folder (Steam-console downgrades); a clear "not found"
+    page with *Choose folder* / *Search again* otherwise.
+  - Chapter settings: keys and sync switches per chapter, reinstall / uninstall / change folder.
+  - Server page: PoppyCoop relay, host on your own PC, or your own servers, each with a connection quality
+    display (signal bars, ping, jitter, loss).
+  - Launcher settings: Dark / Midnight / Light theme, accent colour, smooth animations (can be turned off).
+  - Keeps your name, colour, codes and game folders from the old launcher. One exe for Windows and Proton.
+- **Chapter 2 pullable objects:** everything the GrabPack can pull moves for everyone and stays where it was
+  left (also after reloads and for late joiners); the train handle too.
+- **Chapter 2 minigames:** Musical Memory - whoever wins, wins for everyone. Whack-a-Wuggy - everyone's hits
+  add up, both games reach 40 hits and win.
+- **Chapter 2 figure:** crouching players crouch on the floor instead of floating.
+- **Teleport (F6)** first loads your friend's area and only then teleports you; if you still fall, you're put
+  back on your friend. Areas your own game had hidden are shown again while a friend is in them.
 
 ### 1.3.6
 - **Chapter 1 player figure:** mannequin with a round head (like the game's player model), jointed arms and legs,

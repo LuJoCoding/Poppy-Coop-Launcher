@@ -29,7 +29,7 @@ local ENABLE_POPUPS = Cfg.popups ~= false and Cfg.popups ~= "false"
 -- (was on by default in Chapter 1 for a while: the games froze right after a player joined - suspected:
 -- moving physics bodies while Chaos simulates them. Back to opt-in until that is solved.)
 local ENABLE_PHYSICS = Cfg.sync_physics == true or Cfg.sync_physics == "true"
-    or (P.CHAPTER == 1 and Cfg.sync_physics ~= false and Cfg.sync_physics ~= "false")   -- writes run late (see motion_apply)
+    or ((P.CHAPTER == 1 or P.CHAPTER == 2) and Cfg.sync_physics ~= false and Cfg.sync_physics ~= "false")   -- writes run late in CH1 (see motion_apply)
 local ENABLE_HUGGY = Cfg.sync_huggy == true or Cfg.sync_huggy == "true"
 
 local function fullpath(o)
@@ -187,9 +187,10 @@ local PHYS_CLASSES_CH1 = { "bb_arch_small3_Blueprint_C", "bb_cube7_Blueprint_C",
     "toybox_a30_Blueprint_C", "toybox_b3_Blueprint_C" }
 -- where props came to rest after someone moved them: re-applied after reloads and sent to late joiners
 Motion.final = Motion.final or {}
+local prop_alive              -- defined below (safe validity check by path)
 local function apply_final(t, v)
     P.late(function()
-        if not t.a:IsValid() then return end
+        if not prop_alive(t) then return end
         t.a:K2_SetActorLocationAndRotation({ X = v[1], Y = v[2], Z = v[3] }, { Pitch = v[4], Yaw = v[5], Roll = v[6] }, false, {}, true)
         t.cur = { X = v[1], Y = v[2], Z = v[3], P = v[4], Yw = v[5], R = v[6] }
     end, "prop final")
@@ -201,6 +202,65 @@ local function held(a)
     local t = path and Motion.tracked[path]
     return t ~= nil and t.remote_on == true
 end
+-- Chapter 2: every physics-simulated prop can be pulled with the GrabPack (barrels, buckets, boxes, bins,
+-- toy blocks...) - most are plain StaticMeshActors without a grab component. Scanning all ~5000 static mesh
+-- actors at once costs ~45 ms, so they are checked a few hundred per frame (see motion_scan_step), the list
+-- is fetched once a minute. The BP prop classes below are cheap to find directly.
+local PHYS_CLASSES_CH2 = { "bb_cube7_Blueprint_C", "bb_rect11_Blueprint_C", "toybox_a30_Blueprint_C", "huggie_box4_Blueprint_C",
+    "owen_the_oven_BP_C", "BP_Barrel2_C", "pillow_a14_Blueprint_C", "bunzobox_conveyor_BP_C", "BP_folded_folding_chair_C" }
+local function oaddr(o) local ok, v = pcall(function() return o:GetAddress() end); return ok and v or nil end
+-- streamed-out levels free their actors: never IsValid() a cached object (UE4SS crash) - look it up by path
+prop_alive = function(t)
+    if not t.path then return t.a ~= nil end
+    local a = StaticFindObject(t.path)
+    Motion.dbg = Motion.dbg or {}
+    if not (a and a:IsValid()) then Motion.dbg.gone = (Motion.dbg.gone or 0) + 1; return false end
+    local ad = oaddr(a)
+    if t.addr and ad ~= t.addr then Motion.dbg.addr = (Motion.dbg.addr or 0) + 1; Motion.dbg.addr_ex = tostring(t.addr) .. "/" .. tostring(ad); return false end
+    t.a = a
+    return true
+end
+local function track_prop(a, path, kind)
+    local t = Motion.tracked[path]
+    if t then t.a = a; t.addr = oaddr(a); return t end
+    t = { a = a, kind = kind or "phys", path = path, addr = oaddr(a) }
+    Motion.tracked[path] = t
+    local v = Motion.final[path]                  -- newly loaded: put it where it was left
+    if v then apply_final(t, v) end
+    return t
+end
+-- a prop another player moves that this game hasn't scanned (yet): look it up by its path
+local function resolve_prop(path)
+    if not path or not path:find(":PersistentLevel.", 1, true) then return nil end
+    local a = StaticFindObject(path)
+    if not (a and a:IsValid()) then return nil end
+    return track_prop(a, path, "phys")
+end
+local function motion_scan_step()
+    if P.CHAPTER ~= 2 or not ENABLE_PHYSICS then return end
+    local t = now()
+    if not Motion.cand and t - (Motion.cand_at or -100) > 60 then
+        Motion.cand_at = t
+        Motion.cand = try(function() return FindAllOf("StaticMeshActor") end) or {}
+        Motion.cursor = 1
+        Motion.dbg = Motion.dbg or {}
+        Motion.dbg.fetch_n, Motion.dbg.fetch_at = #Motion.cand, t
+    end
+    local list = Motion.cand
+    if not list then return end
+    local stop = math.min(#list, Motion.cursor + 149)
+    for i = Motion.cursor, stop do
+        local a = list[i]
+        pcall(function()
+            if a:IsValid() and a:K2_GetRootComponent().BodyInstance.bSimulatePhysics == true then
+                local path = fullpath(a)
+                if path and path:find(":PersistentLevel.", 1, true) then track_prop(a, path, "phys") end
+            end
+        end)
+    end
+    Motion.cursor = stop + 1
+    if Motion.cursor > #list then Motion.cand = nil end   -- done: drop the list (its objects may be freed later)
+end
 local function scan_motion()
     Motion.scan_at = now()
     local seen = {}
@@ -208,18 +268,11 @@ local function scan_motion()
         local path = valid(a) and fullpath(a)
         if not path or seen[path] then return end
         seen[path] = true
-        local t = Motion.tracked[path]
-        if t then t.a = a else
-            t = { a = a, kind = kind }
-            Motion.tracked[path] = t
-            -- newly loaded (level reload, streamed back in): put it where it was left
-            local v = Motion.final[path]
-            if v then apply_final(t, v) end
-        end
+        track_prop(a, path, kind)
     end
     if ENABLE_PHYSICS then
         -- Chapter 1's movable props (also the ones only pushed, without a grab component)
-        for _, cls in ipairs(P.CHAPTER == 1 and PHYS_CLASSES_CH1 or {}) do
+        for _, cls in ipairs(P.CHAPTER == 1 and PHYS_CLASSES_CH1 or PHYS_CLASSES_CH2) do
             for _, a in ipairs(try(function() return FindAllOf(cls) end) or {}) do
                 if valid(a) and (simulating(try(function() return a:K2_GetRootComponent() end)) or held(a)) then add(a, "phys") end
             end
@@ -242,7 +295,10 @@ local function scan_motion()
             end
         end
     end
-    for path, t in pairs(Motion.tracked) do if not seen[path] then Motion.tracked[path] = nil end end
+    -- Chapter 2 tracks props found incrementally: those are dropped when they stop existing (prop_alive)
+    if P.CHAPTER ~= 2 then
+        for path, t in pairs(Motion.tracked) do if not seen[path] then Motion.tracked[path] = nil end end
+    end
 end
 
 local function my_player_loc()
@@ -307,7 +363,7 @@ Coop.on("mvfin", function(from, rest)
     local v = { tonumber(a), tonumber(b), tonumber(c), tonumber(d), tonumber(e), tonumber(f) }
     for i = 1, 6 do if not v[i] or v[i] ~= v[i] or math.abs(v[i]) > 2000000 then return end end
     Motion.final[path] = v
-    local t = Motion.tracked[path]
+    local t = Motion.tracked[path] or resolve_prop(path)
     Motion.fin_rx = (Motion.fin_rx or 0) + 1
     if t and not t.driving then apply_final(t, v) end
 end)
@@ -321,10 +377,12 @@ local motion_apply           -- defined below (runs from the late queue in Chapt
 local function motion_tick(dt)
     if Motion.off or not Coop.active() then return end
     if not ENABLE_PHYSICS and not ENABLE_HUGGY then return end
-    if now() - Motion.scan_at > 4 then
+    if now() - Motion.scan_at > (P.CHAPTER == 2 and 30 or 4) then
         local ok, err = pcall(scan_motion)
         if not ok then mfail("scan", err) end
     end
+    local ok0, err0 = pcall(motion_scan_step)
+    if not ok0 then mfail("scan step", err0) end
     local t_now = now()
     local me = my_player_loc()
     -- 1) read every tracked actor; decide whether this game is driving it
@@ -339,7 +397,7 @@ local function motion_tick(dt)
         end
         local ok, err = (far and true) or pcall(function()
             t.read_at = t_now
-            if not t.a:IsValid() then Motion.tracked[path] = nil; return end
+            if not prop_alive(t) then Motion.tracked[path] = nil; return end
             local l, r = t.a:K2_GetActorLocation(), t.a:K2_GetActorRotation()
             local c = { X = l.X, Y = l.Y, Z = l.Z, P = r.Pitch, Yw = r.Yaw, R = r.Roll }
             local remote = t.remote and t_now - t.remote.t < 0.7
@@ -349,7 +407,7 @@ local function motion_tick(dt)
                     -- (settling, sliding) is not "this player moving it" - else it echoes back and forth.
                     -- The physics switch itself runs from the late queue.
                     t.releasing = true
-                    P.late(function() t.releasing = nil; if t.a:IsValid() then set_remote(t, false) end end, "prop release")
+                    P.late(function() t.releasing = nil; if prop_alive(t) then set_remote(t, false) end end, "prop release")
                     t.quiet_until = t_now + 2.0
                 end
                 local last = t.cur
@@ -382,7 +440,7 @@ local function motion_tick(dt)
         if map and st and pl.state_time and t_now - pl.state_time < 0.7 then
             for n, x, y, z, p, yw, r, d in st:gmatch(" M(%d+)=(%-?%d+),(%-?%d+),(%-?%d+),(%-?%d+),(%-?%d+),(%-?%d+),(%d+)") do
                 local path = map[tonumber(n)]
-                local t = path and Motion.tracked[path]
+                local t = path and (Motion.tracked[path] or resolve_prop(path))
                 if t then
                     local theirs = tonumber(d)
                     local mine = me and t.cur and dist(me, t.cur) or 99999
@@ -408,6 +466,7 @@ motion_apply = function()
         local rm = t.remote
         if rm and t_now - rm.t < 0.7 and t.cur then
             local ok, err = pcall(function()
+                if not prop_alive(t) then Motion.tracked[path] = nil; return end
                 set_remote(t, true)
                 local c, k = t.cur, math.min(1, dt * 12)
                 local far = math.abs(rm.X - c.X) + math.abs(rm.Y - c.Y) + math.abs(rm.Z - c.Z) > 400
@@ -524,6 +583,7 @@ local POSE_CLASSES = {
     boogiebot_cutout_BP_C = true, Bunzo_CutoutBP_C = true, candycat_cutout_BP_C = true, catbee_cutout_BP_C = true,
     Dino_Cart_CutoutBP_C = true, pj_cutout_BP_C = true, Sunflower_Cutout_ButtonBP_C = true,
     BP_FurnaceDoor_C = true, BP_FurnaceDoor_Left_C = true,
+    ChooChooTrainPull_C = true,          -- the train handle pulled with the GrabPack
     -- not here: gates/doors driven by power (LargeGate_Moveable, EventRaiseLowerDoors...) - their power
     -- signal is replayed, so they animate by themselves in every game; streaming them too would jitter
 }
@@ -830,6 +890,107 @@ if P.CHAPTER == 1 and P.Late then
     end, "anim_tick" })
 end
 
+------------------------------------------------------------------ minigame sync (Chapter 2)
+-- Shared progress in the game-station games: whoever wins the game wins it for everyone (the room opens
+-- for all, nobody has to replay it). Everyone plays their own pattern; rounds/mistakes are not shared
+-- (SuccessfulRound only runs part of the round logic when called from outside - tested, left out).
+-- Whack-a-Wuggy is played TOGETHER: every hit ("Add Hit") counts in every game, so both players' hits add up
+-- to the 40 needed. (Statues is an escape - each player has to get out themselves - so it is not shared.)
+local MINIGAMES = {
+    { cls = "GameshowController_C", win = "WinTheGame", wonVar = "GameWon" },                       -- Musical Memory
+    -- (no direct win: "Win!"/"Complete Game" called from outside reset the game - tested. Shared hits make
+    -- every game reach the 40 hits itself and win on its own.)
+    { cls = "Whack-A-Mole_Controller_C", wonVar = "Won Game", share = { "Add Hit" } },               -- Whack-a-Wuggy
+}
+P.MINIGAMES = MINIGAMES
+local MG = { hooked = {}, applying = false, scan_at = -100, sent = 0, applied = 0 }
+P.MG = MG
+local function mg_send(i, kind, obj)
+    if MG.applying or not Coop.active() then return end
+    local g = MINIGAMES[i]
+    local path = fullpath(obj)
+    if not (g and path and level_placed(path)) then return end
+    local val = 0
+    if kind == "round" then val = tonumber(try(function() return obj[g.roundVar] end)) or 0 end
+    MG.sent = MG.sent + 1
+    Coop.send_event("mg", ("%d %s %d %s"):format(i, kind, val, path))
+    log("minigame: shared %s (%s %d)", kind, g.cls, val)
+end
+local function mg_share_cb(i, j)
+    return function(ctx)
+        if MG.applying or not Coop.active() then return end
+        local o = try(function() return ctx:get() end)
+        local path = o and fullpath(o)
+        if path and level_placed(path) then Coop.send_event("mgs", ("%d %d %s"):format(i, j, path)); MG.sent = MG.sent + 1 end
+    end
+end
+local function mg_win_cb(i)
+    return function(ctx) local o = try(function() return ctx:get() end); if o then mg_send(i, "win", o) end end
+end
+-- Hooks are registered once per function. One registered right after a load can fail ("UFunction::Func:
+-- 0x0", not linked yet): only a hook that really worked is marked done, the others are retried in 5 s.
+local ENABLE_MINIGAMES = Cfg.sync_minigames ~= false and Cfg.sync_minigames ~= "false"   -- launcher setting
+local function mg_hook()
+    if P.CHAPTER ~= 2 or not ENABLE_MINIGAMES then return end
+    MG.scan_at = now()
+    MG.ok = MG.ok or {}
+    for i, g in ipairs(MINIGAMES) do
+        if not MG.hooked[g.cls] then
+            local a = try(function() return FindFirstOf(g.cls) end)
+            local cls = valid(a) and try(function() return a:GetClass() end)
+            local cp = cls and fullpath(cls)
+            if cp then
+                local all = true
+                local wanted = {}
+                if g.win then wanted[#wanted + 1] = { g.win, mg_win_cb(i) } end
+                for j, fn in ipairs(g.share or {}) do wanted[#wanted + 1] = { fn, mg_share_cb(i, j) } end
+                for _, w in ipairs(wanted) do
+                    local key = cp .. ":" .. w[1]
+                    if not MG.ok[key] then
+                        local ok = pcall(RegisterHook, key, w[2])
+                        if ok then MG.ok[key] = true else all = false end
+                    end
+                end
+                if all then MG.hooked[g.cls] = true end
+                log("minigame sync for %s: %s", g.cls, all and "on" or "retrying")
+            end
+        end
+    end
+end
+-- a shared step of a minigame (e.g. a Whack-a-Wuggy hit) done by another player: do it here too
+Coop.on("mgs", function(from, rest)
+    local i, j, path = rest:match("^(%d+) (%d+) (%S+)$")
+    local g = i and MINIGAMES[tonumber(i)]
+    local fn = g and g.share and g.share[tonumber(j)]
+    if not (fn and level_placed(path)) then return end
+    local a = StaticFindObject(path)
+    if not (a and a:IsValid()) then return end
+    if try(function() return a[g.wonVar] end) == true then return end
+    MG.applying = true
+    pcall(function() a[fn](a) end)
+    MG.applying = false
+    MG.applied = MG.applied + 1
+end)
+Coop.on("mg", function(from, rest)
+    local i, kind, val, path = rest:match("^(%d+) (%a+) (%-?%d+) (%S+)$")
+    i, val = tonumber(i), tonumber(val)
+    local g = i and MINIGAMES[i]
+    if not (g and (kind == "round" or kind == "win") and level_placed(path)) then return end
+    local a = StaticFindObject(path)
+    if not (a and a:IsValid()) then return end
+    if try(function() return a[g.wonVar] end) == true then return end          -- already won here
+    if kind == "round" then
+        local r = tonumber(try(function() return a[g.roundVar] end))
+        if r ~= val then return end                                         -- not on that round (any more)
+    end
+    MG.applying = true
+    local ok, err = pcall(function() a[kind == "win" and g.win or g.round](a) end)
+    MG.applying = false
+    MG.applied = MG.applied + 1
+    log("minigame: %s from %s applied (%s) %s", kind, pname(from), g.cls, ok and "" or tostring(err))
+    popup(kind == "win" and (pname(from) .. " won the game for everyone") or (pname(from) .. " cleared the round"))
+end)
+
 ------------------------------------------------------------------ wiring
 -- Alone in a room for a while: the usual reason is a different code or a different chapter (rooms are
 -- per chapter - a Chapter 2 code typed into Chapter 1 opens an empty Chapter 1 room). Say so once.
@@ -852,6 +1013,7 @@ table.insert(Handlers.tick, function(dt, have)
     crumb("extra: alone"); pcall(alone_tick)
     crumb("extra: motion"); motion_tick(dt)
     crumb("extra: pose"); pose_tick(dt)
+    if P.CHAPTER == 2 and now() - MG.scan_at > 5 then crumb("extra: minigames"); pcall(mg_hook) end
     crumb("extra: done")
     -- bridges are skeletal meshes animated in parallel worker tasks: reading/setting their animation
     -- inside the player's tick waited on those tasks and froze the game (seen in a debugger). Run it at
@@ -862,6 +1024,9 @@ table.insert(Handlers.unload, function()
     -- the level is going away: forget every engine object
     Popup.actors, Popup.cls = {}, nil
     Motion.tracked, Motion.scan_at = {}, -100
+    -- the candidate list holds objects of the old world; the next list is fetched 10 s after the load
+    -- (right after it only a handful of actors exist yet)
+    Motion.cand, Motion.cand_at = nil, now() - 50
 end)
 -- the class dump (debug) used to run automatically and froze/crashed big levels; now only on request
 RegisterConsoleCommandHandler("coop_dump", function(_, _, out)
