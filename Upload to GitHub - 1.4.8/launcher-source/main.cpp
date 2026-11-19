@@ -8,7 +8,225 @@
 #include <cmath>
 
 // ------------------------------------------------------------------ messages from worker threads
-enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE };
+enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE, WM_APP_UPDATE };
+static std::wstring g_latest;      // newest release on GitHub (empty: unknown / offline)
+// ------------------------------------------------------------------ language (English / Deutsch)
+static int g_lang = 0;                    // 0 English, 1 Deutsch (ini [Launcher] Lang)
+static const std::unordered_map<std::wstring, std::wstring>& de_table() {
+    static const std::unordered_map<std::wstring, std::wstring> m = {
+        { L" (update ready)", L" (Update bereit)" },
+        { L" - testing the connection...", L" - Verbindung wird getestet..." },
+        { L" - your figure's colour in other players' games", L" - die Farbe deiner Figur bei den anderen" },
+        { L" available - download", L" verfügbar - herunterladen" },
+        { L" in your ", L" in deinem " },
+        { L" installed", L" installiert" },
+        { L" is ready to be set up", L" ist bereit zur Einrichtung" },
+        { L" isn't in that folder", L" ist nicht in diesem Ordner" },
+        { L" settings", L" - Einstellungen" },
+        { L" too.", L" auch." },
+        { L" wasn't found automatically", L" wurde nicht automatisch gefunden" },
+        { L". Pick the chapter and press PLAY!", L". Wähle das Kapitel und drücke SPIELEN!" },
+        { L"A relay address (wss://...) or a friend's IP, e.g. 203.0.113.5 or 203.0.113.5:27777", L"Eine Relay-Adresse (wss://...) oder die IP eines Freundes, z. B. 203.0.113.5 oder 203.0.113.5:27777" },
+        { L"ACCENT COLOUR", L"AKZENTFARBE" },
+        { L"ADD A SERVER", L"SERVER HINZUFÜGEN" },
+        { L"ADD A SERVER (remove one first - 3 at most)", L"SERVER HINZUFÜGEN (erst einen entfernen - höchstens 3)" },
+        { L"Add", L"Hinzufügen" },
+        { L"Added ", L"Hinzugefügt: " },
+        { L"Animations", L"Animationen" },
+        { L"Ask your friend for their code, or just open the invite link they sent you.", L"Frag deinen Freund nach seinem Code oder öffne einfach den Einladungslink, den er dir geschickt hat." },
+        { L"Browse", L"Durchsuchen" },
+        { L"CHAPTER ", L"KAPITEL " },
+        { L"CO-OP", L"KOOP" },
+        { L"CO-OP MOD", L"KOOP-MOD" },
+        { L"Careful: the game uses ", L"Achtung: das Spiel benutzt " },
+        { L"Change folder", L"Ordner ändern" },
+        { L"Chapter ", L"Kapitel " },
+        { L"Chapters 3 to 5 come in a later update. You can set up another chapter any time from the list on the left.", L"Kapitel 3 bis 5 kommen in einem späteren Update. Du kannst jederzeit links ein weiteres Kapitel einrichten." },
+        { L"Choose folder...", L"Ordner wählen..." },
+        { L"Click a key, then press the new one", L"Taste klicken, neue drücken" },
+        { L"Click to confirm", L"Zum Bestätigen klicken" },
+        { L"Close Poppy Playtime first so the mod can be installed.", L"Schließe zuerst Poppy Playtime, damit die Mod installiert werden kann." },
+        { L"Close the game first.", L"Schließe zuerst das Spiel." },
+        { L"Co-op for this chapter is still being built. It unlocks in a future update of the launcher.", L"Koop für dieses Kapitel ist noch in Arbeit. Es kommt mit einem späteren Launcher-Update." },
+        { L"Co-op mod not installed yet - it installs when you press Play", L"Koop-Mod noch nicht installiert - sie wird beim Klick auf Spielen installiert" },
+        { L"Co-op mod removed - your game is back to normal.", L"Koop-Mod entfernt - dein Spiel ist wieder normal." },
+        { L"Co-op mod v", L"Koop-Mod v" },
+        { L"Coming later", L"Kommt später" },
+        { L"Copied to clipboard!  Room code ", L"In die Zwischenablage kopiert!  Raum-Code " },
+        { L"Copy code", L"Code kopieren" },
+        { L"Copy invite", L"Einladung kopieren" },
+        { L"Couldn't remove everything - close the game or run the launcher as administrator.", L"Konnte nicht alles entfernen - schließe das Spiel oder starte den Launcher als Administrator." },
+        { L"Couldn't save the mod settings - close the game or run the launcher as administrator.", L"Konnte die Mod-Einstellungen nicht speichern - schließe das Spiel oder starte den Launcher als Administrator." },
+        { L"Couldn't save the mod settings - try running the launcher as administrator.", L"Konnte die Mod-Einstellungen nicht speichern - starte den Launcher als Administrator." },
+        { L"Couldn't start the game.", L"Konnte das Spiel nicht starten." },
+        { L"Done", L"Fertig" },
+        { L"Everyone you play with has to pick the same server.", L"Alle, mit denen du spielst, müssen denselben Server wählen." },
+        { L"F6 takes you to a friend - even to their later checkpoint.", L"F6 bringt dich zu einem Freund - auch zu seinem späteren Checkpoint." },
+        { L"F8 / F9 are kept free for other mods - pick another key.", L"F8 / F9 bleiben für andere Mods frei - wähle eine andere Taste." },
+        { L"FIGURE COLOUR", L"FIGURFARBE" },
+        { L"FRIEND'S ROOM CODE", L"RAUM-CODE DEINES FREUNDES" },
+        { L"Found Chapter ", L"Gefunden: Kapitel " },
+        { L"Game found - ready to set up  \x203A", L"Spiel gefunden - bereit zur Einrichtung  \x203A" },
+        { L"Have fun! F6 = go to a friend, T = ping a spot.", L"Viel Spaß! F6 = zu einem Freund, T = Stelle markieren." },
+        { L"How the launcher looks. This doesn't change anything in the game.", L"Wie der Launcher aussieht. Ändert nichts im Spiel." },
+        { L"If the game is somewhere else (another drive, a copied folder), choose the folder that contains ", L"Liegt das Spiel woanders (andere Festplatte, kopierter Ordner), wähle selbst den Ordner, der " },
+        { L" yourself.", L" enthält." },
+        { L"Install co-op mod", L"Koop-Mod installieren" },
+        { L"Install failed - close the game, or run the launcher as administrator.", L"Installation fehlgeschlagen - schließe das Spiel oder starte den Launcher als Administrator." },
+        { L"Invite copied - paste it to your friends!", L"Einladung kopiert - schick sie deinen Freunden!" },
+        { L"Invite opened - room ", L"Einladung geöffnet - Raum " },
+        { L"Is this the right folder? If not, pick another one with Browse.", L"Ist das der richtige Ordner? Wenn nicht, wähle mit Durchsuchen einen anderen." },
+        { L"Jump straight in and play with anyone who's online right now. No code needed.", L"Direkt loslegen und mit allen spielen, die gerade online sind. Kein Code nötig." },
+        { L"Keys reset to the defaults.", L"Tasten auf Standard zurückgesetzt." },
+        { L"Launcher settings", L"Launcher-Einstellungen" },
+        { L"Log selected + its end copied - paste it in Discord (Ctrl+V).", L"Log markiert + Ende kopiert - füge es in Discord ein (Strg+V)." },
+        { L"Measuring...", L"Messe..." },
+        { L"My figure colour", L"Meine Figurfarbe" },
+        { L"Name & colour", L"Name & Farbe" },
+        { L"Name & colour  \x203A", L"Name & Farbe  \x203A" },
+        { L"New code", L"Neuer Code" },
+        { L"No folder selected yet - click Browse", L"Noch kein Ordner gewählt - klicke auf Durchsuchen" },
+        { L"No game log yet - start the game once.", L"Noch kein Spiel-Log - starte das Spiel einmal." },
+        { L"No room code on the clipboard.", L"Kein Raum-Code in der Zwischenablage." },
+        { L"Not installed", L"Nicht installiert" },
+        { L"OK?", L"OK?" },
+        { L"Only found the old Chapter 1 - co-op needs v1.3.", L"Nur das alte Kapitel 1 gefunden - Koop braucht v1.3." },
+        { L"Open folder", L"Ordner öffnen" },
+        { L"PLAYER NAME", L"SPIELERNAME" },
+        { L"POPPY PLAYTIME", L"POPPY PLAYTIME" },
+        { L"Paste", L"Einfügen" },
+        { L"Pasted room code ", L"Raum-Code eingefügt: " },
+        { L"Pick the chapter you want to play. The launcher only asks for that chapter's game folder - you don't need the other chapters.", L"Wähle das Kapitel, das du spielen willst. Der Launcher fragt nur nach dem Spielordner dieses Kapitels - die anderen brauchst du nicht." },
+        { L"Play Poppy Playtime together", L"Poppy Playtime zusammen spielen" },
+        { L"Playing as ", L"Du spielst als " },
+        { L"Poppy Playtime found (version couldn't be checked)", L"Poppy Playtime gefunden (Version nicht prüfbar)" },
+        { L"Public lobby", L"Öffentliche Lobby" },
+        { L"Recent:", L"Zuletzt:" },
+        { L"Reinstall", L"Neu installieren" },
+        { L"Reset keys", L"Tasten zurücksetzen" },
+        { L"SET UP CHAPTER ", L"KAPITEL EINRICHTEN " },
+        { L"SHARED WITH YOUR ROOM", L"MIT DEINEM RAUM GETEILT" },
+        { L"Saved - takes effect next time you start the game.", L"Gespeichert - gilt beim nächsten Spielstart." },
+        { L"Search again", L"Erneut suchen" },
+        { L"Server & connection", L"Server & Verbindung" },
+        { L"Set up  \x203A", L"Einrichten  \x203A" },
+        { L"Settings", L"Einstellungen" },
+        { L"Share the code or the invite. Friends pick Join Game and enter it.", L"Teile den Code oder die Einladung. Freunde wählen Beitreten und geben ihn ein." },
+        { L"Show game log (after a crash)", L"Spiel-Log zeigen (nach Absturz)" },
+        { L"Smooth fades and movements. Turn off on very slow PCs.", L"Weiche Übergänge und Bewegungen. Auf sehr langsamen PCs ausschalten." },
+        { L"Starting Poppy Playtime - Steam may take a few seconds", L"Poppy Playtime startet - Steam braucht evtl. ein paar Sekunden" },
+        { L"Starting Poppy Playtime...", L"Poppy Playtime startet..." },
+        { L"Still not found - choose the folder yourself.", L"Immer noch nicht gefunden - wähle den Ordner selbst." },
+        { L"Swapped with \"", L"Getauscht mit \"" },
+        { L"Test again", L"Erneut testen" },
+        { L"Testing...", L"Teste..." },
+        { L"That doesn't look like a server address.", L"Das sieht nicht wie eine Server-Adresse aus." },
+        { L"That key can't be used - pick another one.", L"Diese Taste geht nicht - wähle eine andere." },
+        { L"That server is already in the list.", L"Dieser Server ist schon in der Liste." },
+        { L"The game didn't open yet - check Steam.", L"Das Spiel ist noch nicht offen - prüfe Steam." },
+        { L"The game is already running - close it to switch rooms.", L"Das Spiel läuft schon - schließe es, um den Raum zu wechseln." },
+        { L"The game is running - changes apply next time you start it.", L"Das Spiel läuft - Änderungen gelten beim nächsten Start." },
+        { L"The launcher looked in all your Steam libraries and in Steam's download folder - a version downloaded with the Steam console (downpatch) always ends up there:", L"Der Launcher hat in allen Steam-Bibliotheken und im Steam-Download-Ordner gesucht - eine mit der Steam-Konsole (Downpatch) geladene Version landet immer hier:" },
+        { L"This is the old Chapter 1 - update it to v1.3 in Steam first", L"Das ist das alte Kapitel 1 - aktualisiere es zuerst in Steam auf v1.3" },
+        { L"Type a name first.", L"Gib zuerst einen Namen ein." },
+        { L"Type your friend's room code first.", L"Gib zuerst den Raum-Code deines Freundes ein." },
+        { L"UE4SS.log is selected - send it to us (Discord) together with what happened.", L"UE4SS.log ist markiert - schick sie uns (Discord) mit einer Beschreibung, was passiert ist." },
+        { L"Uninstall", L"Deinstallieren" },
+        { L"Update available: v", L"Update verfügbar: v" },
+        { L"Update v", L"Update v" },
+        { L"Use the same settings as your friends.", L"Benutzt dieselben Einstellungen wie deine Freunde." },
+        { L"What should other players call you?", L"Wie sollen dich die anderen nennen?" },
+        { L"What's new", L"Was ist neu" },
+        { L"YOUR ROOM CODE", L"DEIN RAUM-CODE" },
+        { L"You are the server", L"Du bist der Server" },
+        { L"Your name floats above your figure in everyone else's game. Letters, numbers, _ and - only.", L"Dein Name schwebt bei allen anderen über deiner Figur. Nur Buchstaben, Zahlen, _ und -." },
+        { L"\"My figure colour\" follows the colour you play with (Name & colour).", L"\"Meine Figurfarbe\" folgt der Farbe, mit der du spielst (Name & Farbe)." },
+        { L"\x2039  Back", L"\x2039  Zurück" },
+        { L"friends connect to you", L"Freunde verbinden sich mit dir" },
+        { L"In game", L"Im Spiel" },
+        { L"Not set up yet", L"Noch nicht eingerichtet" },
+        { L"Installs when you play", L"Wird beim Spielen installiert" },
+        { L"Update ready", L"Update bereit" },
+        { L"Your room ", L"Dein Raum " },
+        { L"Room ", L"Raum " },
+        { L"Fan-made co-op mod. Not affiliated with Mob Entertainment.", L"Fan-Mod. Nicht verbunden mit Mob Entertainment." },
+        { L"KEYS", L"TASTEN" },
+        { L"THEME", L"DESIGN" },
+        { L"WELCOME", L"WILLKOMMEN" },
+        { L"LAUNCHER", L"LAUNCHER" },
+        { L"SERVERS", L"SERVER" },
+        { L"CHAPTERS", L"KAPITEL" },
+        { L"Quick Play", L"Schnellspiel" },
+        { L"Create Game", L"Spiel erstellen" },
+        { L"Join Game", L"Beitreten" },
+        { L"PLAY", L"SPIELEN" },
+        { L"READY", L"BEREIT" },
+        { L"BETA", L"BETA" },
+        { L"SOON", L"BALD" },
+        { L"LANGUAGE", L"SPRACHE" },
+        { L"Doors, switches & puzzles", L"Türen, Schalter & Rätsel" },
+        { L"Doors, power, levers, puzzle parts", L"Türen, Strom, Hebel, Rätselteile" },
+        { L"Picked-up items", L"Aufgehobene Gegenstände" },
+        { L"Gone for everyone once picked up", L"Für alle weg, sobald aufgehoben" },
+        { L"Shared inventory", L"Gemeinsames Inventar" },
+        { L"One team inventory for keys & items", L"Ein Team-Inventar für Schlüssel & Gegenstände" },
+        { L"Shared GrabPack hands", L"Gemeinsame GrabPack-Hände" },
+        { L"A new hand goes to everyone", L"Eine neue Hand bekommen alle" },
+        { L"Pullable objects", L"Ziehbare Objekte" },
+        { L"Boxes, barrels, chairs move for all", L"Kisten, Fässer, Stühle bewegen sich für alle" },
+        { L"Keep friends' areas loaded", L"Bereiche der Freunde geladen halten" },
+        { L"Off = safer: their rooms' enemies can't reach you", L"Aus = sicherer: Gegner aus ihren Räumen erreichen dich nicht" },
+        { L"Minigames", L"Minispiele" },
+        { L"Musical Memory, Whack-a-Wuggy", L"Musical Memory, Whack-a-Wuggy" },
+        { L"Follow out of chases", L"Aus Verfolgungen mitnehmen" },
+        { L"Friend escaped a chase you're in: go to them", L"Freund entkommt einer Verfolgung, in der du steckst: zu ihm" },
+        { L"Respawn at a friend", L"Beim Freund wiederbeleben" },
+        { L"After dying you are teleported to a friend", L"Nach dem Tod wirst du zu einem Freund teleportiert" },
+        { L"Stand on friends", L"Auf Freunden stehen" },
+        { L"Jump on a friend's head to reach higher spots", L"Auf den Kopf eines Freundes springen, um höher zu kommen" },
+        { L"Limit to 60 fps", L"Auf 60 fps begrenzen" },
+        { L"Smoother on weaker PCs, less heat", L"Ruhiger auf schwächeren PCs, weniger Hitze" },
+        { L"On-screen messages", L"Meldungen im Spiel" },
+        { L"Joined / died / teleport messages", L"Beigetreten / gestorben / Teleport-Meldungen" },
+        { L"Teleport to a friend", L"Zu einem Freund teleportieren" },
+        { L"Show / hide buddy figure", L"Begleitfigur zeigen / verstecken" },
+        { L"Record your movement", L"Bewegung aufnehmen" },
+        { L"Replay recorded movement", L"Aufnahme abspielen" },
+        { L"Ping a spot for everyone", L"Stelle für alle markieren" },
+        { L"Show fps / ping / players", L"fps / Ping / Spieler zeigen" },
+        { L"Quick chat (press again: next)", L"Schnell-Chat" },
+        { L"Explore the abandoned toy factory together. Doors, power, puzzles, items, pullable objects and loaded areas are shared with everyone in your room.", L"Erkundet zusammen die verlassene Spielzeugfabrik. Türen, Strom, Rätsel, Gegenstände, ziehbare Objekte und geladene Bereiche werden mit allen im Raum geteilt." },
+        { L"Explore the Game Station together. Doors, keys and items, power, checkpoints, pullable objects and loaded areas are shared - and Musical Memory and Whack-a-Wuggy are played together.", L"Erkundet zusammen die Game Station. Türen, Schlüssel und Gegenstände, Strom, Hebel und ziehbare Objekte werden geteilt - Musical Memory und Whack-a-Wuggy spielt ihr zusammen." }
+    };
+    return m;
+}
+static std::wstring tr(const std::wstring& en) {
+    if (g_lang != 1) return en;
+    auto& m = de_table();
+    auto it = m.find(en);
+    return it == m.end() ? en : it->second;
+}
+
+static const wchar_t* WHATS_NEW =
+    L"- Levers, switches and the Game Station lights work for everyone (level events are shared).\n"
+    L"- F6 to a friend who is further: you load their checkpoint first (chases/games are over for you too).\n"
+    L"- A friend escapes a chase you are still in: you are brought to them.\n"
+    L"- Fixed deaths from falling through the floor when a friend reached a checkpoint or loaded a game room.\n"
+    L"- Much less lag in long sessions (game hooks no longer pile up after every death).\n"
+    L"- Chapter 2: friend's GrabPack hand turns, grabs and its cable bends around corners; flashlight casts light.\n"
+    L"- T = ping a spot, Y = quick chat, F10 = status (fps, ping, where your friends are).\n"
+    L"- Stand on friends, respawn at a friend, footsteps, version check when someone joins.\n"
+    L"- Chapter settings: 'Show game log (after a crash)'.";
+static const wchar_t* WHATS_NEW_DE =
+    L"- Hebel, Schalter und das Licht der Game Station gelten für alle.\n"
+    L"- F6 zu einem Freund, der weiter ist: du lädst zuerst seinen Checkpoint (Verfolgungen/Spiele sind auch bei dir vorbei).\n"
+    L"- Ein Freund entkommt einer Verfolgung, in der du noch steckst: du wirst zu ihm geholt.\n"
+    L"- Tode durch Fallen durch den Boden behoben (Checkpoint oder Spielraum eines Freundes).\n"
+    L"- Viel weniger Lag in langen Runden (Hooks stapeln sich nach Toden nicht mehr).\n"
+    L"- Kapitel 2: die GrabPack-Hand des Freundes dreht sich, greift, ihr Kabel biegt sich um Ecken; seine Taschenlampe leuchtet.\n"
+    L"- T = Stelle markieren, Y = Schnell-Chat, F10 = Status (fps, Ping, wo deine Freunde sind).\n"
+    L"- Auf Freunden stehen, beim Freund wiederbeleben, Fußschritte, Versions-Check.\n"
+    L"- Einstellungen: 'Spiel-Log zeigen (nach Absturz)', Sprache Deutsch/Englisch.";
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4 };
 
 // ------------------------------------------------------------------ state
@@ -256,7 +474,7 @@ static void textbox(int x, int y, int w, int h, std::wstring* value, size_t max,
 
 static void badge(int x, int y, const wchar_t* label) {
     COLORREF c = !label ? C_DIM : (wcscmp(label, L"READY") == 0 ? C_OK : C_WARN);
-    std::wstring t = label ? label : L"SOON";
+    std::wstring t = tr(label ? label : L"SOON");
     int w = text_w(t, F_SMALL) + 14;
     RECT r = R(x, y, w, 18);
     fill(r, mix(c, C_BG, 0.75), 9);
@@ -313,8 +531,8 @@ static void browse_folder(Chapter& c) {
 static void apply_settings(Chapter& c) {
     chapter_save_settings(c);
     if (!inst_ver(c).empty()) {
-        if (!write_mod_settings(c, g_prof)) toast(L"Couldn't save the mod settings - close the game or run the launcher as administrator.");
-        else if (g_running[g_sel]) toast(L"Saved - takes effect next time you start the game.");
+        if (!write_mod_settings(c, g_prof)) toast(tr(L"Couldn't save the mod settings - close the game or run the launcher as administrator."));
+        else if (g_running[g_sel]) toast(tr(L"Saved - takes effect next time you start the game."));
     }
 }
 
@@ -403,8 +621,8 @@ static void signal_bars(int x, int y, const Probe* p, unsigned long long key) {
     }
 }
 static std::wstring probe_text(const Server& v, const Probe* p) {
-    if (v.kind == SrvKind::Host) return L"You are the server";
-    if (!p || !p->done) return L"Measuring...";
+    if (v.kind == SrvKind::Host) return tr(L"You are the server");
+    if (!p || !p->done) return tr(L"Measuring...");
     if (p->ms < 0) return p->note.empty() ? L"Unreachable" : p->note;
     return std::to_wstring(p->ms) + L" ms  \x00B7  " + quality_label(quality(*p));
 }
@@ -429,8 +647,8 @@ static void draw_server_card(int h) {
 // ------------------------------------------------------------------ sidebar
 static void draw_sidebar(int h) {
     fill(R(0, 0, 280, h), C_SIDE);
-    text(R(28, 26, 240, 30), L"POPPY PLAYTIME", F_LOGO, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(28, 56, 240, 30), L"CO-OP", F_LOGO, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(28, 26, 240, 30), tr(L"POPPY PLAYTIME"), F_LOGO, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(28, 56, 240, 30), tr(L"CO-OP"), F_LOGO, acc_text(), DT_LEFT | DT_SINGLELINE);
 
     // profile card
     RECT pc = R(16, 100, 248, 58);
@@ -439,10 +657,10 @@ static void draw_sidebar(int h) {
     circle(44, 129, 13, player_rgb(g_prof.color));   // the figure colour, even with another accent
     std::wstring nm = g_prof.name.empty() ? L"Set your name" : g_prof.name;
     text(R(66, 110, 180, 20), nm, F_BOLD, g_prof.name.empty() ? C_WARN : C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    text(R(66, 130, 180, 18), L"Name & colour  \x203A", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(66, 130, 180, 18), tr(L"Name & colour  \x203A"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
     click(pc, [] { g_page = Page::Profile; g_edit_name = g_prof.name; g_focus = { &g_edit_name, 24, false }; });
 
-    text(R(28, 180, 200, 18), L"CHAPTERS", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(28, 180, 200, 18), tr(L"CHAPTERS"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
     bool any_sel = g_page != Page::Welcome && g_page != Page::App;
     double bar = anim(akey(14, 0, 0), g_sel, 16), bar_a = anim(akey(15, 0, 0), any_sel ? 1.0 : 0.0, 14);
     for (int i = 0; i < (int)g_ch.size(); i++) {
@@ -452,7 +670,7 @@ static void draw_sidebar(int h) {
         double ht = anim(akey(12, i, 0), hover(r) ? 1.0 : 0.0, 16), st = anim(akey(13, i, 0), sel ? 1.0 : 0.0, 14);
         fill(r, mix(mix(C_SIDE, C_CARD, ht), C_CARD2, st), 10);
         COLORREF tc = playable(c) ? C_TEXT : C_DIM;
-        text(R(32, 210 + i * 62, 160, 20), L"Chapter " + std::to_wstring(c.num), F_BOLD, tc, DT_LEFT | DT_SINGLELINE);
+        text(R(32, 210 + i * 62, 160, 20), tr(L"Chapter ") + std::to_wstring(c.num), F_BOLD, tc, DT_LEFT | DT_SINGLELINE);
         std::wstring sub = c.title;
         if (playable(c)) {
             if (g_running[i]) sub = L"In game";
@@ -460,7 +678,7 @@ static void draw_sidebar(int h) {
             else if (inst_ver(c).empty()) sub = L"Installs when you play";
             else if (inst_ver(c) != MOD_VERSION) sub = L"Update ready";
         }
-        text(R(32, 230 + i * 62, 170, 18), sub, F_SMALL, g_running[i] ? C_OK : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(32, 230 + i * 62, 170, 18), tr(sub), F_SMALL, g_running[i] ? C_OK : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         badge(200, 211 + i * 62, c.badge);
         click(r, [i] { g_sel = i; g_page = Page::Chapter; g_focus = {}; g_capture = -1; g_confirm_uninstall = false; save_profile(); });
     }
@@ -473,7 +691,7 @@ static void draw_sidebar(int h) {
         bool on = g_page == Page::App;
         double ht = anim(akey(16, 0, 0), hover(r) ? 1.0 : 0.0, 16);
         fill(r, mix(mix(C_SIDE, C_CARD, ht), C_CARD2, on ? 1.0 : 0.0), 10);
-        text(R(32, h - 98, 220, 36), L"Launcher settings", F_SMALL, on ? C_TEXT : mix(C_DIM, C_TEXT, ht), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        text(R(32, h - 98, 220, 36), tr(L"Launcher settings"), F_SMALL, on ? C_TEXT : mix(C_DIM, C_TEXT, ht), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         click(r, [] { g_page = Page::App; g_focus = {}; g_capture = -1; });
     }
 
@@ -502,10 +720,10 @@ static void draw_colors(int x, int y) {
 static std::wstring dir_message(const Chapter& c, COLORREF& col) {
     switch (c.state) {
     case DirState::Ok: col = C_OK; return c.needs_ue5 ? L"Chapter 1 v1.3 found (Unreal Engine 5)" : L"Chapter " + std::to_wstring(c.num) + L" found";
-    case DirState::OkUnknownVersion: col = C_OK; return L"Poppy Playtime found (version couldn't be checked)";
-    case DirState::OldVersion: col = C_BAD; return L"This is the old Chapter 1 - update it to v1.3 in Steam first";
-    case DirState::NotFound: col = C_BAD; return L"Chapter " + std::to_wstring(c.num) + L" isn't in that folder";
-    default: col = C_DIM; return L"No folder selected yet - click Browse";
+    case DirState::OkUnknownVersion: col = C_OK; return tr(L"Poppy Playtime found (version couldn't be checked)");
+    case DirState::OldVersion: col = C_BAD; return tr(L"This is the old Chapter 1 - update it to v1.3 in Steam first");
+    case DirState::NotFound: col = C_BAD; return tr(L"Chapter ") + std::to_wstring(c.num) + tr(L" isn't in that folder");
+    default: col = C_DIM; return tr(L"No folder selected yet - click Browse");
     }
 }
 
@@ -525,11 +743,11 @@ static void search_again(Chapter& c) {
     if (d.what == Found::Ok) {
         c.dir = d.dir; c.found_where = d.where; c.state = check_dir(c, c.dir);
         ini_set(L"Launcher", c.ini_key, c.dir);
-        toast(L"Found Chapter " + std::to_wstring(c.num) + L" in your " + d.where + L".");
+        toast(tr(L"Found Chapter ") + std::to_wstring(c.num) + tr(L" in your ") + d.where + L".");
     } else if (d.what == Found::OldVersion) {
         c.dir = d.dir; c.found_where = d.where; c.state = check_dir(c, c.dir);
-        toast(L"Only found the old Chapter 1 - co-op needs v1.3.");
-    } else toast(L"Still not found - choose the folder yourself.");
+        toast(tr(L"Only found the old Chapter 1 - co-op needs v1.3."));
+    } else toast(tr(L"Still not found - choose the folder yourself."));
 }
 
 static void draw_folder_row(Chapter& c, int y) {
@@ -539,7 +757,7 @@ static void draw_folder_row(Chapter& c, int y) {
     text({ box.left + S(14), box.top, box.right - S(10), box.bottom }, shown, F_SMALL, c.dir.empty() ? C_DIM : C_TEXT,
          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
     Chapter* pc = &c;
-    button(MX + MW - 118, y, 118, 40, L"Browse", Btn::Secondary, [pc] { browse_folder(*pc); pc->found_where.clear(); });
+    button(MX + MW - 118, y, 118, 40, tr(L"Browse"), Btn::Secondary, [pc] { browse_folder(*pc); pc->found_where.clear(); });
     COLORREF col;
     std::wstring m = dir_message(c, col);
     if (dir_usable(c.state) && !c.found_where.empty()) m += L" - found automatically (" + c.found_where + L")";
@@ -552,21 +770,20 @@ static void draw_not_found(Chapter& c, int y) {
     g_view = 3;
     RECT card = R(MX - 16, y, MW + 32, 330);
     fill(card, C_CARD, 14);
-    text(R(MX, y + 18, MW, 20), L"SET UP CHAPTER " + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, y + 18, MW, 20), tr(L"SET UP CHAPTER ") + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     circle(MX + 12, y + 56, 12, mix(C_CARD, C_WARN, 0.25));
     text(R(MX, y + 44, 24, 24), L"?", F_BOLD, C_WARN, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    text(R(MX + 36, y + 42, MW - 36, 28), L"Chapter " + std::to_wstring(c.num) + L" wasn't found automatically", F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(MX, y + 84, MW, 40), L"The launcher looked in all your Steam libraries and in Steam's download folder - a version "
-         L"downloaded with the Steam console (downpatch) always ends up there:", F_SMALL, C_DIM);
+    text(R(MX + 36, y + 42, MW - 36, 28), tr(L"Chapter ") + std::to_wstring(c.num) + tr(L" wasn't found automatically"), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, y + 84, MW, 40), tr(L"The launcher looked in all your Steam libraries and in Steam's download folder - a version "
+         L"downloaded with the Steam console (downpatch) always ends up there:"), F_SMALL, C_DIM);
     std::wstring depot = L"steamapps\\content\\app_" + std::wstring(c.appid) + L"\\depot_" + std::to_wstring(_wtoi(c.appid) + 1);
     RECT pr = R(MX, y + 126, MW, 34);
     fill(pr, C_BG, 8);
     text(R(MX + 14, y + 126, MW - 28, 34), L"Steam\\" + depot, F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    text(R(MX, y + 172, MW, 40), L"If the game is somewhere else (another drive, a copied folder), choose the folder that "
-         L"contains " + std::wstring(c.exe) + L" yourself.", F_SMALL, C_DIM);
+    text(R(MX, y + 172, MW, 40), tr(L"If the game is somewhere else (another drive, a copied folder), choose the folder that contains ") + std::wstring(c.exe) + tr(L" yourself."), F_SMALL, C_DIM);
     Chapter* pc = &c;
-    button(MX + MW - 220, y + 270, 220, 44, L"Choose folder...", Btn::Primary, [pc] { browse_folder(*pc); pc->found_where.clear(); });
-    button(MX + MW - 380, y + 270, 148, 44, L"Search again", Btn::Ghost, [pc] { search_again(*pc); });
+    button(MX + MW - 220, y + 270, 220, 44, tr(L"Choose folder..."), Btn::Primary, [pc] { browse_folder(*pc); pc->found_where.clear(); });
+    button(MX + MW - 380, y + 270, 148, 44, tr(L"Search again"), Btn::Ghost, [pc] { search_again(*pc); });
 }
 
 static void draw_setup(Chapter& c, int y) {
@@ -574,30 +791,31 @@ static void draw_setup(Chapter& c, int y) {
     g_view = 2;
     RECT card = R(MX - 16, y, MW + 32, 330);
     fill(card, C_CARD, 14);
-    text(R(MX, y + 18, MW, 20), L"SET UP CHAPTER " + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, y + 18, MW, 20), tr(L"SET UP CHAPTER ") + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     bool found = dir_usable(c.state);
-    text(R(MX, y + 38, MW, 26), found ? L"Chapter " + std::to_wstring(c.num) + L" is ready to be set up"
+    text(R(MX, y + 38, MW, 26), found ? tr(L"Chapter ") + std::to_wstring(c.num) + tr(L" is ready to be set up")
                                       : L"Where is Chapter " + std::to_wstring(c.num) + L" installed?", F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
     std::wstring tip = c.needs_ue5 ? L"Co-op needs Chapter 1 version 1.3 (the current Steam version). " : L"";
-    tip += found ? L"Is this the right folder? If not, pick another one with Browse."
+    tip += found ? tr(L"Is this the right folder? If not, pick another one with Browse.")
                  : L"Pick the folder that contains " + std::wstring(c.exe) + L" (Steam > right-click the game > Manage > Browse local files).";
     text(R(MX, y + 68, MW, 40), tip, F_SMALL, C_DIM);
     draw_folder_row(c, y + 114);
 
     int by = y + 200;
-    text(R(MX, by, 300, 20), L"What should other players call you?", F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, by, 300, 20), tr(L"What should other players call you?"), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
     textbox(MX, by + 24, 300, 40, &g_prof.name, 24, false, L"Your name", F_BODY);
     draw_colors(MX + 320, by + 26);
     if (g_installing && g_install_ch == g_sel) { progress_button(MX + MW - 220, y + 270, 220, 44, L"Installing"); return; }
     bool ok = found && !trim(g_prof.name).empty() && !g_installing;
     int idx = g_sel;
-    button(MX + MW - 220, y + 270, 220, 44, L"Install co-op mod", Btn::Primary, [idx] {
+    button(MX + MW - 220, y + 270, 220, 44, tr(L"Install co-op mod"), Btn::Primary, [idx] {
         g_prof.name = clean_name(g_prof.name); save_profile(); g_focus = {};
-        if (game_running(g_ch[idx])) { toast(L"Close Poppy Playtime first so the mod can be installed."); return; }
+        if (game_running(g_ch[idx])) { toast(tr(L"Close Poppy Playtime first so the mod can be installed.")); return; }
         start_install(idx, false);
     }, ok);
 }
 
+static std::vector<std::wstring> recent_codes();
 static void draw_modes(int y) {
     const wchar_t* tabs[] = { L"Quick Play", L"Create Game", L"Join Game" };
     int tw = (MW - 16) / 3;
@@ -610,38 +828,48 @@ static void draw_modes(int y) {
     for (int i = 0; i < 3; i++) {
         RECT r = R(MX + i * (tw + 8), y, tw, 42);
         double on = 1.0 - std::min(1.0, fabs(pos - i));
-        text(r, tabs[i], F_BOLD, mix(C_TEXT, on_color(accent()), on), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        text(r, tr(tabs[i]), F_BOLD, mix(C_TEXT, on_color(accent()), on), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         click(r, [i] { g_prof.tab = i; g_focus = i == 2 ? Field{ &g_prof.join_code, 12, true } : Field{}; save_profile(); });
     }
     RECT card = R(MX, y + 54, MW, 150);
     fill(card, C_CARD, 14);
     int cy = y + 72;
     if (g_prof.tab == 0) {
-        text(R(MX + 20, cy, MW - 40, 24), L"Public lobby", F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
-        text(R(MX + 20, cy + 32, MW - 40, 60), L"Jump straight in and play with anyone who's online right now. No code needed.", F_BODY, C_DIM);
+        text(R(MX + 20, cy, MW - 40, 24), tr(L"Public lobby"), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+        text(R(MX + 20, cy + 32, MW - 40, 60), tr(L"Jump straight in and play with anyone who's online right now. No code needed."), F_BODY, C_DIM);
     } else if (g_prof.tab == 1) {
         if (g_prof.code.empty()) { g_prof.code = new_code(); save_profile(); }
-        text(R(MX + 20, cy, 300, 18), L"YOUR ROOM CODE", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+        text(R(MX + 20, cy, 300, 18), tr(L"YOUR ROOM CODE"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
         RECT cr = R(MX + 20, cy + 20, 260, 48);
         text(cr, g_prof.code, F_CODE, hover(cr) ? acc_text() : C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        click(cr, [] { copy_text(g_prof.code); toast(L"Copied to clipboard!  Room code " + g_prof.code); });
-        button(MX + 300, cy + 4, 150, 36, L"Copy code", Btn::Secondary, [] { copy_text(g_prof.code); toast(L"Copied to clipboard!  Room code " + g_prof.code); });
-        button(MX + 460, cy + 4, 156, 36, L"Copy invite", Btn::Secondary, [] {
+        click(cr, [] { copy_text(g_prof.code); toast(tr(L"Copied to clipboard!  Room code ") + g_prof.code); });
+        button(MX + 300, cy + 4, 150, 36, tr(L"Copy code"), Btn::Secondary, [] { copy_text(g_prof.code); toast(tr(L"Copied to clipboard!  Room code ") + g_prof.code); });
+        button(MX + 460, cy + 4, 156, 36, tr(L"Copy invite"), Btn::Secondary, [] {
             copy_text(L"Join my Poppy Playtime co-op game!\r\nRoom code: " + g_prof.code +
                       L"\r\nIn the PoppyCoop launcher pick Join Game and enter the code, or open this link: poppycoop://join/" + g_prof.code);
-            toast(L"Invite copied - paste it to your friends!");
+            toast(tr(L"Invite copied - paste it to your friends!"));
         });
-        button(MX + 300, cy + 48, 150, 36, L"New code", Btn::Ghost, [] { g_prof.code = new_code(); save_profile(); });
-        text(R(MX + 20, cy + 96, MW - 40, 40), L"Share the code or the invite. Friends pick Join Game and enter it.", F_SMALL, C_DIM);
+        button(MX + 300, cy + 48, 150, 36, tr(L"New code"), Btn::Ghost, [] { g_prof.code = new_code(); save_profile(); });
+        text(R(MX + 20, cy + 96, MW - 40, 40), tr(L"Share the code or the invite. Friends pick Join Game and enter it."), F_SMALL, C_DIM);
     } else {
-        text(R(MX + 20, cy, 300, 18), L"FRIEND'S ROOM CODE", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+        text(R(MX + 20, cy, 300, 18), tr(L"FRIEND'S ROOM CODE"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
         textbox(MX + 20, cy + 22, 300, 48, &g_prof.join_code, 12, true, L"ABC123", F_BIG);
-        button(MX + 336, cy + 28, 120, 36, L"Paste", Btn::Secondary, [] {
+        button(MX + 336, cy + 28, 120, 36, tr(L"Paste"), Btn::Secondary, [] {
             std::wstring code = extract_code(clipboard_text());
-            if (code.empty()) { toast(L"No room code on the clipboard."); return; }
-            g_prof.join_code = code; save_profile(); toast(L"Pasted room code " + code);
+            if (code.empty()) { toast(tr(L"No room code on the clipboard.")); return; }
+            g_prof.join_code = code; save_profile(); toast(tr(L"Pasted room code ") + code);
         });
-        text(R(MX + 20, cy + 84, MW - 40, 40), L"Ask your friend for their code, or just open the invite link they sent you.", F_SMALL, C_DIM);
+        auto rc = recent_codes();
+        if (rc.empty())
+            text(R(MX + 20, cy + 84, MW - 40, 40), tr(L"Ask your friend for their code, or just open the invite link they sent you."), F_SMALL, C_DIM);
+        else {
+            text(R(MX + 20, cy + 82, 70, 30), tr(L"Recent:"), F_SMALL, C_DIM, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            int x = MX + 90;
+            for (auto& code : rc) {
+                button(x, cy + 82, 100, 30, code, code == g_prof.join_code ? Btn::Primary : Btn::Ghost, [code] { g_prof.join_code = code; save_profile(); });
+                x += 108;
+            }
+        }
     }
 }
 
@@ -649,16 +877,16 @@ static void draw_play_bar(Chapter& c, int y) {
     // mod status (left) + play button (right)
     std::wstring iv = inst_ver(c), st;
     COLORREF col = C_OK;
-    if (iv.empty()) { st = L"Co-op mod not installed yet - it installs when you press Play"; col = C_WARN; }
-    else if (iv != MOD_VERSION) { st = L"Update available: v" + iv + L" to v" MOD_VERSION L" - installs when you press Play"; col = C_WARN; }
-    else st = L"Co-op mod v" + iv + L" installed";
+    if (iv.empty()) { st = tr(L"Co-op mod not installed yet - it installs when you press Play"); col = C_WARN; }
+    else if (iv != MOD_VERSION) { st = tr(L"Update available: v") + iv + L" to v" MOD_VERSION L" - installs when you press Play"; col = C_WARN; }
+    else st = tr(L"Co-op mod v") + iv + tr(L" installed");
     circle(MX + 6, y + 13, 4, col);
     text(R(MX + 18, y + 3, MW - 260, 20), st, F_SMALL, col, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    std::wstring room = g_prof.tab == 0 ? L"Public lobby" : (g_prof.tab == 1 ? L"Your room " + g_prof.code : L"Room " + (g_prof.join_code.empty() ? L"-" : g_prof.join_code));
-    text(R(MX + 18, y + 24, MW - 260, 20), L"Playing as " + g_prof.name + L"  \x00B7  " + room + L"  \x00B7  " + g_servers[g_srv].name, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    text(R(MX + 18, y + 44, MW - 260, 20), L"Everyone loads the same checkpoint (Play > Load Game).", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    std::wstring room = g_prof.tab == 0 ? tr(L"Public lobby") : (g_prof.tab == 1 ? tr(L"Your room ") + g_prof.code : tr(L"Room ") + (g_prof.join_code.empty() ? L"-" : g_prof.join_code));
+    text(R(MX + 18, y + 24, MW - 260, 20), tr(L"Playing as ") + g_prof.name + L"  \x00B7  " + room + L"  \x00B7  " + g_servers[g_srv].name, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    text(R(MX + 18, y + 44, MW - 260, 20), tr(L"F6 takes you to a friend - even to their later checkpoint."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    std::wstring label = L"PLAY";
+    std::wstring label = tr(L"PLAY");
     bool en = true;
     if (g_running[g_sel]) { label = L"IN GAME"; en = false; }
     else if (g_installing) { progress_button(MX + MW - 220, y, 220, 64, L"INSTALLING"); return; }
@@ -668,23 +896,23 @@ static void draw_play_bar(Chapter& c, int y) {
 
 static void draw_chapter(int h) {
     Chapter& c = cur();
-    text(R(MX, 28, 300, 18), L"CHAPTER " + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 28, 300, 18), tr(L"CHAPTER ") + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     text(R(MX, 46, MW - 160, 40), c.title, F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
     badge(MX + text_w(c.title, F_H1) + 14, 60, c.badge);
     if (!playable(c)) {
         g_view = 1;
         RECT card = R(MX, 110, MW, 150);
         fill(card, C_CARD, 14);
-        text(R(MX + 24, 132, MW - 48, 24), L"Coming later", F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
-        text(R(MX + 24, 166, MW - 48, 60), L"Co-op for this chapter is still being built. It unlocks in a future update of the launcher.", F_BODY, C_DIM);
+        text(R(MX + 24, 132, MW - 48, 24), tr(L"Coming later"), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+        text(R(MX + 24, 166, MW - 48, 60), tr(L"Co-op for this chapter is still being built. It unlocks in a future update of the launcher."), F_BODY, C_DIM);
         return;
     }
     // the setup card stays until the player pressed "Install" once (or the mod is already there)
     bool ready = dir_usable(c.state) && !trim(g_prof.name).empty() && !(g_installing && g_install_ch == g_sel)
                  && (!inst_ver(c).empty() || setup_done(c));
     if (ready)
-        button(MX + MW - 130, 50, 130, 36, L"Settings", Btn::Ghost, [] { g_page = Page::Settings; g_focus = {}; g_capture = -1; g_confirm_uninstall = false; });
-    text(R(MX, 98, MW, 44), c.blurb, F_SMALL, C_DIM);
+        button(MX + MW - 130, 50, 130, 36, tr(L"Settings"), Btn::Ghost, [] { g_page = Page::Settings; g_focus = {}; g_capture = -1; g_confirm_uninstall = false; });
+    text(R(MX, 98, MW, 44), tr(c.blurb), F_SMALL, C_DIM);
     if (!ready) { draw_setup(c, 152); return; }
     g_view = 4;
     draw_modes(156);
@@ -693,9 +921,9 @@ static void draw_chapter(int h) {
 
 // ------------------------------------------------------------------ welcome page (first start: nothing is set up yet)
 static void draw_welcome(int h) {
-    text(R(MX, 28, MW, 18), L"WELCOME", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 46, MW, 40), L"Play Poppy Playtime together", F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 96, MW, 40), L"Pick the chapter you want to play. The launcher only asks for that chapter's game folder - you don't need the other chapters.", F_BODY, C_DIM);
+    text(R(MX, 28, MW, 18), tr(L"WELCOME"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW, 40), tr(L"Play Poppy Playtime together"), F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 96, MW, 40), tr(L"Pick the chapter you want to play. The launcher only asks for that chapter's game folder - you don't need the other chapters."), F_BODY, C_DIM);
     int cw = (MW - 16) / 2;
     for (int i = 0; i < 2; i++) {
         Chapter& c = g_ch[i];
@@ -703,15 +931,15 @@ static void draw_welcome(int h) {
         bool hv = hover(r);
         fill(r, hv ? C_CARD2 : C_CARD, 14);
         if (hv) frame(r, accent(), 14, 2);
-        text(R(MX + i * (cw + 16) + 22, 182, cw - 44, 18), L"CHAPTER " + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+        text(R(MX + i * (cw + 16) + 22, 182, cw - 44, 18), tr(L"CHAPTER ") + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
         text(R(MX + i * (cw + 16) + 22, 202, cw - 44, 30), c.title, F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
         badge(MX + i * (cw + 16) + 22, 238, c.badge);
-        text(R(MX + i * (cw + 16) + 22, 266, cw - 44, 90), c.blurb, F_SMALL, C_DIM);
-        std::wstring st = dir_usable(c.state) ? L"Game found - ready to set up  \x203A" : L"Set up  \x203A";
+        text(R(MX + i * (cw + 16) + 22, 266, cw - 44, 90), tr(c.blurb), F_SMALL, C_DIM);
+        std::wstring st = dir_usable(c.state) ? tr(L"Game found - ready to set up  \x203A") : tr(L"Set up  \x203A");
         text(R(MX + i * (cw + 16) + 22, 356, cw - 44, 20), st, F_BOLD, hv ? acc_text() : C_TEXT, DT_LEFT | DT_SINGLELINE);
         click(r, [i] { g_sel = i; g_page = Page::Chapter; save_profile(); });
     }
-    text(R(MX, 410, MW, 40), L"Chapters 3 to 5 come in a later update. You can set up another chapter any time from the list on the left.", F_SMALL, C_DIM);
+    text(R(MX, 410, MW, 40), tr(L"Chapters 3 to 5 come in a later update. You can set up another chapter any time from the list on the left."), F_SMALL, C_DIM);
     (void)h;
 }
 
@@ -757,14 +985,14 @@ static void set_key(UINT vk) {
     if (g_capture < 0 || g_capture >= (int)c.keys.size()) return;
     if (vk == VK_ESCAPE) { g_capture = -1; return; }
     const wchar_t* n = vk_name(vk);
-    if (!n) { toast(L"That key can't be used - pick another one."); return; }
+    if (!n) { toast(tr(L"That key can't be used - pick another one.")); return; }
     std::wstring k = n;
-    if (k == L"F8" || k == L"F9") toast(L"F8 / F9 are kept free for other mods - pick another key.");
+    if (k == L"F8" || k == L"F9") toast(tr(L"F8 / F9 are kept free for other mods - pick another key."));
     else {
         for (int i = 0; i < (int)c.keys.size(); i++)
-            if (i != g_capture && c.keys[i].value == k) { c.keys[i].value = c.keys[g_capture].value; toast(L"Swapped with \"" + std::wstring(c.keys[i].label) + L"\"."); }
+            if (i != g_capture && c.keys[i].value == k) { c.keys[i].value = c.keys[g_capture].value; toast(tr(L"Swapped with \"") + std::wstring(c.keys[i].label) + L"\"."); }
         c.keys[g_capture].value = k;
-        if (game_key(k)) toast(L"Careful: the game uses " + key_label(k) + L" too.");
+        if (game_key(k)) toast(tr(L"Careful: the game uses ") + key_label(k) + tr(L" too."));
         apply_settings(c);
     }
     g_capture = -1;
@@ -779,101 +1007,127 @@ static void draw_toggle(int x, int y, bool on) {
 
 static void draw_settings(int h) {
     Chapter& c = cur();
-    button(MX, 26, 96, 32, L"\x2039  Back", Btn::Ghost, [] { g_page = Page::Chapter; g_capture = -1; g_confirm_uninstall = false; });
-    text(R(MX + 112, 28, MW - 112, 30), L"Chapter " + std::to_wstring(c.num) + L" settings", F_BIG, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (g_running[g_sel]) text(R(MX, 64, MW, 18), L"The game is running - changes apply next time you start it.", F_SMALL, C_WARN, DT_LEFT | DT_SINGLELINE);
+    button(MX, 26, 96, 32, tr(L"\x2039  Back"), Btn::Ghost, [] { g_page = Page::Chapter; g_capture = -1; g_confirm_uninstall = false; });
+    text(R(MX + 112, 28, MW - 112, 30), tr(L"Chapter ") + std::to_wstring(c.num) + tr(L" settings"), F_BIG, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (g_running[g_sel]) text(R(MX, 64, MW, 18), tr(L"The game is running - changes apply next time you start it."), F_SMALL, C_WARN, DT_LEFT | DT_SINGLELINE);
 
     // keys
     int y = 92;
     RECT kc = R(MX, y, 300, 254);   // keys card: left column, 300 wide
     fill(kc, C_CARD, 14);
-    text(R(MX + 18, y + 14, 260, 18), L"KEYS", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, y + 14, 260, 18), tr(L"KEYS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    const size_t nk = c.keys.size();               // up to 6 keys fit the card
+    const int kstep = nk > 6 ? 25 : nk > 5 ? 29 : nk > 4 ? 35 : 44, kh = nk > 6 ? 23 : nk > 5 ? 26 : nk > 4 ? 30 : 34;
     for (int i = 0; i < (int)c.keys.size(); i++) {
-        int ry = y + 40 + i * 44;
-        text(R(MX + 18, ry, 170, 34), c.keys[i].label, F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        int ry = y + 40 + i * kstep;
+        text(R(MX + 18, ry, 170, kh), tr(c.keys[i].label), F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         bool cap = g_capture == i;
         std::wstring lbl = cap ? L"press a key" : key_label(c.keys[i].value);
-        button(MX + 190, ry, 92, 34, lbl, cap ? Btn::Primary : Btn::Secondary, [i] { g_capture = g_capture == i ? -1 : i; g_focus = {}; });
+        button(MX + 190, ry, 92, kh, lbl, cap ? Btn::Primary : Btn::Secondary, [i] { g_capture = g_capture == i ? -1 : i; g_focus = {}; });
     }
-    button(MX + 18, y + 218, 120, 26, L"Reset keys", Btn::Ghost, [] {
+    button(MX + 18, y + 218, 150, 26, tr(L"Reset keys"), Btn::Ghost, [] {
         Chapter& ch = cur();
         for (auto& k : ch.keys) k.value = k.def;
-        apply_settings(ch); toast(L"Keys reset to F6 / F7 / O / P.");
+        apply_settings(ch); toast(tr(L"Keys reset to the defaults."));
     });
-    text(R(MX + 146, y + 214, 150, 34), L"Click a key, then press the new one", F_SMALL, C_DIM);
+    text(R(MX + 176, y + 214, 120, 34), tr(L"Click a key, then press the new one"), F_SMALL, C_DIM);
 
     // sync options
     const int SX = MX + 312, SW = MW - 312;
-    RECT sc = R(SX, y, SW, 446);
+    int nrows0 = 0;
+    for (auto& o : c.sync) if (o.chapters & (1 << (c.num - 1))) nrows0++;
+    const int card_h = std::max(446, 40 + nrows0 * (nrows0 > 9 ? 36 : nrows0 > 8 ? 41 : 46) + 34);
+    RECT sc = R(SX, y, SW, card_h);
     fill(sc, C_CARD, 14);
-    text(R(SX + 18, y + 14, SW - 36, 18), L"SHARED WITH YOUR ROOM", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    int row = 0;
+    text(R(SX + 18, y + 14, SW - 36, 18), tr(L"SHARED WITH YOUR ROOM"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    int row = 0, nrows = 0;
+    for (auto& o : c.sync) if (o.chapters & (1 << (c.num - 1))) nrows++;
+    const int step = nrows > 9 ? 36 : nrows > 8 ? 41 : 46;      // many rows: tighter, and the card grows (below)
     for (int i = 0; i < (int)c.sync.size(); i++) {
         SyncOpt& o = c.sync[i];
         if (!(o.chapters & (1 << (c.num - 1)))) continue;
-        int ry = y + 40 + row * 46;
-        RECT rr = R(SX + 8, ry - 3, SW - 16, 44);
+        int ry = y + 40 + row * step;
+        RECT rr = R(SX + 8, ry - 3, SW - 16, step - 2);
         if (hover(rr)) fill(rr, C_CARD2, 8);
-        text(R(SX + 18, ry, SW - 90, 18), o.label, F_SMALL, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        text(R(SX + 18, ry + 18, SW - 90, 18), o.hint, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(SX + 18, ry, SW - 90, 18), tr(o.label), F_SMALL, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(SX + 18, ry + 18, SW - 90, 18), tr(o.hint), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         draw_toggle(SX + SW - 58, ry + 8, o.value);
         click(rr, [i] { Chapter& ch = cur(); ch.sync[i].value = !ch.sync[i].value; apply_settings(ch); });
         row++;
     }
-    text(R(SX + 18, y + 412, SW - 36, 20), L"Use the same settings as your friends.", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(SX + 18, y + card_h - 26, SW - 36, 20), tr(L"Use the same settings as your friends."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
 
     // folder + mod
     int my = y + 266;
-    RECT mc = R(MX, my, 300, 180);
+    RECT mc = R(MX, my, 300, 214);
     fill(mc, C_CARD, 14);
-    text(R(MX + 18, my + 14, 260, 18), L"CO-OP MOD", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, my + 14, 260, 18), tr(L"CO-OP MOD"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     std::wstring iv = inst_ver(c);
-    text(R(MX + 18, my + 34, 270, 18), iv.empty() ? L"Not installed" : L"v" + iv + (iv == MOD_VERSION ? L" installed" : L" (update ready)"), F_SMALL, iv.empty() ? C_WARN : C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, my + 34, 270, 18), iv.empty() ? tr(L"Not installed") : L"v" + iv + (iv == MOD_VERSION ? tr(L" installed") : tr(L" (update ready)")), F_SMALL, iv.empty() ? C_WARN : C_TEXT, DT_LEFT | DT_SINGLELINE);
     text(R(MX + 18, my + 54, 266, 18), c.dir, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
     my += 30;
     int idx = g_sel;
-    button(MX + 18, my + 60, 128, 30, L"Reinstall", Btn::Secondary, [idx] {
-        if (game_running(g_ch[idx])) { toast(L"Close the game first."); return; }
+    button(MX + 18, my + 60, 128, 30, tr(L"Reinstall"), Btn::Secondary, [idx] {
+        if (game_running(g_ch[idx])) { toast(tr(L"Close the game first.")); return; }
         start_install(idx, false);
     }, !g_installing);
-    button(MX + 154, my + 60, 128, 30, g_confirm_uninstall ? L"Click to confirm" : L"Uninstall", g_confirm_uninstall ? Btn::Danger : Btn::Ghost, [idx] {
+    button(MX + 154, my + 60, 128, 30, g_confirm_uninstall ? tr(L"Click to confirm") : tr(L"Uninstall"), g_confirm_uninstall ? Btn::Danger : Btn::Ghost, [idx] {
         Chapter& ch = g_ch[idx];
         if (!g_confirm_uninstall) { g_confirm_uninstall = true; return; }
         g_confirm_uninstall = false;
-        if (game_running(ch)) { toast(L"Close the game first."); return; }
+        if (game_running(ch)) { toast(tr(L"Close the game first.")); return; }
         bool ok = (DeleteFileW((bin_dir(ch) + L"\\dwmapi.dll").c_str()) || !file_exists(bin_dir(ch) + L"\\dwmapi.dll"));
         ok = delete_tree(mod_dir(ch)) && ok;
         iv_reset();
-        toast(ok ? L"Co-op mod removed - your game is back to normal." : L"Couldn't remove everything - close the game or run the launcher as administrator.");
+        toast(ok ? tr(L"Co-op mod removed - your game is back to normal.") : tr(L"Couldn't remove everything - close the game or run the launcher as administrator."));
     }, !iv.empty() && !g_installing);
-    button(MX + 18, my + 98, 128, 30, L"Change folder", Btn::Ghost, [idx] { browse_folder(g_ch[idx]); });
-    button(MX + 154, my + 98, 128, 30, L"Open folder", Btn::Ghost, [idx] {
+    button(MX + 18, my + 98, 128, 30, tr(L"Change folder"), Btn::Ghost, [idx] { browse_folder(g_ch[idx]); });
+    button(MX + 154, my + 98, 128, 30, tr(L"Open folder"), Btn::Ghost, [idx] {
         Chapter& ch = g_ch[idx];
         std::wstring d = dir_exists(mod_dir(ch)) ? mod_dir(ch) : ch.dir;
         ShellExecuteW(nullptr, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    });
+    // after a crash: the game log tells what the mod did last - show it so it can be sent to us
+    button(MX + 18, my + 136, 264, 30, tr(L"Show game log (after a crash)"), Btn::Ghost, [idx] {
+        Chapter& ch = g_ch[idx];
+        std::wstring log = bin_dir(ch) + L"\\ue4ss\\UE4SS.log";
+        if (!file_exists(log)) { toast(tr(L"No game log yet - start the game once.")); return; }
+        std::wstring args = L"/select,\"" + log + L"\"";
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+        // also copy a short report (versions + the last 80 log lines) for pasting into Discord
+        std::string data;
+        if (read_file(log, data)) {
+            size_t pos = data.size();
+            for (int n = 0; n < 81 && pos > 0; ) { pos--; if (data[pos] == '\n') n++; }
+            std::string tail = data.substr(pos);
+            std::wstring rep = L"PoppyCoop report - mod v" MOD_VERSION L", launcher " LAUNCHER_VERSION L", Chapter " + std::to_wstring(ch.num)
+                + L", installed v" + inst_ver(ch) + L"\r\n```\r\n" + std::wstring(tail.begin(), tail.end()) + L"\r\n```";
+            copy_text(rep);
+            toast(tr(L"Log selected + its end copied - paste it in Discord (Ctrl+V)."));
+        } else toast(tr(L"UE4SS.log is selected - send it to us (Discord) together with what happened."));
     });
     (void)h;
 }
 
 // ------------------------------------------------------------------ profile page
 static void draw_profile(int h) {
-    button(MX, 26, 96, 32, L"\x2039  Back", Btn::Ghost, [] {
+    button(MX, 26, 96, 32, tr(L"\x2039  Back"), Btn::Ghost, [] {
         std::wstring n = clean_name(g_edit_name);
         if (!n.empty()) g_prof.name = n;
         save_profile(); g_page = Page::Chapter; g_focus = {};
     });
-    text(R(MX + 112, 28, MW - 112, 30), L"Name & colour", F_BIG, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    text(R(MX + 112, 28, MW - 112, 30), tr(L"Name & colour"), F_BIG, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     RECT card = R(MX, 84, MW, 250);
     fill(card, C_CARD, 14);
-    text(R(MX + 24, 104, 400, 18), L"PLAYER NAME", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 24, 104, 400, 18), tr(L"PLAYER NAME"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     textbox(MX + 24, 126, 320, 44, &g_edit_name, 24, false, L"Your name", F_BIG);
-    text(R(MX + 24, 178, MW - 48, 20), L"Your name floats above your figure in everyone else's game. Letters, numbers, _ and - only.", F_SMALL, C_DIM);
-    text(R(MX + 24, 214, 400, 18), L"FIGURE COLOUR", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 24, 178, MW - 48, 20), tr(L"Your name floats above your figure in everyone else's game. Letters, numbers, _ and - only."), F_SMALL, C_DIM);
+    text(R(MX + 24, 214, 400, 18), tr(L"FIGURE COLOUR"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     draw_colors(MX + 24, 238);
-    for (auto& c : COLORS) if (g_prof.color == c.id) text(R(MX + 24, 284, 300, 20), std::wstring(c.label) + L" - your figure's colour in other players' games", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
-    button(MX + MW - 160, 346, 160, 42, L"Done", Btn::Primary, [] {
+    for (auto& c : COLORS) if (g_prof.color == c.id) text(R(MX + 24, 284, 300, 20), std::wstring(c.label) + tr(L" - your figure's colour in other players' games"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    button(MX + MW - 160, 346, 160, 42, tr(L"Done"), Btn::Primary, [] {
         std::wstring n = clean_name(g_edit_name);
-        if (n.empty()) { toast(L"Type a name first."); return; }
+        if (n.empty()) { toast(tr(L"Type a name first.")); return; }
         g_prof.name = n; save_profile(); g_page = Page::Chapter; g_focus = {};
         for (auto& ch : g_ch) if (!inst_ver(ch).empty()) write_mod_settings(ch, g_prof);
     });
@@ -885,15 +1139,16 @@ static void save_app_prefs() {
     ini_set(L"Launcher", L"Theme", g_theme);
     ini_set(L"Launcher", L"Accent", g_accent_pref);
     ini_set(L"Launcher", L"Animations", g_anims ? L"1" : L"0");
+    ini_set(L"Launcher", L"Lang", g_lang == 1 ? L"de" : L"en");
 }
 
 static void draw_app(int h) {
-    text(R(MX, 28, MW, 18), L"LAUNCHER", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 46, MW, 40), L"Launcher settings", F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 92, MW, 20), L"How the launcher looks. This doesn't change anything in the game.", F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 28, MW, 18), tr(L"LAUNCHER"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW, 40), tr(L"Launcher settings"), F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 92, MW, 20), tr(L"How the launcher looks. This doesn't change anything in the game."), F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE);
 
     // themes: a small preview of each
-    text(R(MX, 130, MW, 18), L"THEME", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 130, MW, 18), tr(L"THEME"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     int cw = (MW - 32) / 3;
     for (int i = 0; i < 3; i++) {
         const Theme& t = THEMES[i];
@@ -916,7 +1171,7 @@ static void draw_app(int h) {
     }
 
     // accent colour
-    text(R(MX, 306, MW, 18), L"ACCENT COLOUR", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 306, MW, 18), tr(L"ACCENT COLOUR"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     {
         RECT r = R(MX, 328, 196, 40);
         bool sel = g_accent_pref == L"figure";
@@ -924,7 +1179,7 @@ static void draw_app(int h) {
         fill(r, mix(C_CARD, C_CARD2, ht), 20);
         if (st > 0.02) frame(r, mix(C_CARD, accent(), st), 20, 2);
         circle(MX + 22, 348, 9, player_rgb(g_prof.color));
-        text(R(MX + 40, 328, 150, 40), L"My figure colour", F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        text(R(MX + 40, 328, 150, 40), tr(L"My figure colour"), F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         click(r, [] { g_accent_pref = L"figure"; save_app_prefs(); });
     }
     for (int i = 0; i < 7; i++) {
@@ -938,15 +1193,19 @@ static void draw_app(int h) {
         std::wstring id = COLORS[i].id;
         click(r, [id] { g_accent_pref = id; save_app_prefs(); });
     }
-    text(R(MX, 376, MW, 20), L"\"My figure colour\" follows the colour you play with (Name & colour).", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 376, MW, 20), tr(L"\"My figure colour\" follows the colour you play with (Name & colour)."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
 
     // animations
     RECT ar = R(MX, 414, MW, 60);
     fill(ar, mix(C_CARD, C_CARD2, anim(akey(26, 0, 0), hover(ar) ? 1.0 : 0.0, 16)), 12);
-    text(R(MX + 18, 422, MW - 100, 20), L"Animations", F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(MX + 18, 444, MW - 100, 20), L"Smooth fades and movements. Turn off on very slow PCs.", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, 422, MW - 100, 20), tr(L"Animations"), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, 444, MW - 100, 20), tr(L"Smooth fades and movements. Turn off on very slow PCs."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
     draw_toggle(MX + MW - 60, 433, g_anims);
     click(ar, [] { g_anims = !g_anims; save_app_prefs(); });
+    // language
+    text(R(MX, 492, MW, 18), tr(L"LANGUAGE"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    button(MX, 514, 130, 36, L"English", g_lang == 0 ? Btn::Primary : Btn::Ghost, [] { g_lang = 0; save_app_prefs(); });
+    button(MX + 140, 514, 130, 36, L"Deutsch", g_lang == 1 ? Btn::Primary : Btn::Ghost, [] { g_lang = 1; save_app_prefs(); });
     (void)h;
 }
 
@@ -961,10 +1220,10 @@ static void select_server(int i) {
 }
 
 static void draw_servers(int h) {
-    text(R(MX, 28, MW, 18), L"SERVERS", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 46, MW - 160, 40), L"Server & connection", F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    button(MX + MW - 130, 50, 130, 36, g_probing ? L"Testing..." : L"Test again", Btn::Ghost, [] { start_probe(true); }, !g_probing);
-    text(R(MX, 92, MW, 20), L"Everyone you play with has to pick the same server.", F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 28, MW, 18), tr(L"SERVERS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW - 160, 40), tr(L"Server & connection"), F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    button(MX + MW - 130, 50, 130, 36, g_probing ? tr(L"Testing...") : tr(L"Test again"), Btn::Ghost, [] { start_probe(true); }, !g_probing);
+    text(R(MX, 92, MW, 20), tr(L"Everyone you play with has to pick the same server."), F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE);
 
     for (int i = 0; i < (int)g_servers.size(); i++) {
         const Server& v = g_servers[i];
@@ -990,8 +1249,8 @@ static void draw_servers(int h) {
         const Probe* p = probe_of(v);
         int qx = MX + right - 200;
         if (v.kind == SrvKind::Host) {
-            text(R(qx + 34, y + 9, 166, 20), L"You are the server", F_SMALL, C_TEXT, DT_LEFT | DT_SINGLELINE);
-            text(R(qx + 34, y + 29, 166, 18), L"friends connect to you", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+            text(R(qx + 34, y + 9, 166, 20), tr(L"You are the server"), F_SMALL, C_TEXT, DT_LEFT | DT_SINGLELINE);
+            text(R(qx + 34, y + 29, 166, 18), tr(L"friends connect to you"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
         } else {
             signal_bars(qx, y + 18, p, akey(42, i, 0));
             COLORREF qc = p && p->done ? quality_color(quality(*p)) : C_DIM;
@@ -1006,7 +1265,7 @@ static void draw_servers(int h) {
         click(r, [i] { select_server(i); });
         if (!v.builtin) {
             bool conf = g_confirm_remove == i;
-            button(MX + MW - 42, y + 15, conf ? 34 : 28, 28, conf ? L"OK?" : L"x", conf ? Btn::Danger : Btn::Ghost, [i] {
+            button(MX + MW - 42, y + 15, conf ? 34 : 28, 28, conf ? tr(L"OK?") : L"x", conf ? Btn::Danger : Btn::Ghost, [i] {
                 if (g_confirm_remove != i) { g_confirm_remove = i; return; }
                 g_confirm_remove = -1;
                 g_servers.erase(g_servers.begin() + i);
@@ -1023,22 +1282,22 @@ static void draw_servers(int h) {
     bool full = g_servers.size() >= 5;
     RECT card = R(MX, y, MW, 104);
     fill(card, C_CARD, 12);
-    text(R(MX + 16, y + 10, 300, 18), full ? L"ADD A SERVER (remove one first - 3 at most)" : L"ADD A SERVER", F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 16, y + 10, 300, 18), full ? tr(L"ADD A SERVER (remove one first - 3 at most)") : tr(L"ADD A SERVER"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     textbox(MX + 16, y + 32, 170, 40, &g_new_name, 24, false, L"Name", F_SMALL);
     textbox(MX + 196, y + 32, MW - 330, 40, &g_new_addr, 120, false, L"wss://... or IP of a friend who hosts", F_SMALL);
-    button(MX + MW - 120, y + 32, 104, 40, L"Add", Btn::Primary, [] {
+    button(MX + MW - 120, y + 32, 104, 40, tr(L"Add"), Btn::Primary, [] {
         Server v;
-        if (!parse_server(g_new_addr, v)) { toast(L"That doesn't look like a server address."); return; }
+        if (!parse_server(g_new_addr, v)) { toast(tr(L"That doesn't look like a server address.")); return; }
         v.name = trim(g_new_name).empty() ? v.addr : trim(g_new_name);
         v.builtin = false;
-        for (auto& o : g_servers) if (srv_key(o) == srv_key(v)) { toast(L"That server is already in the list."); return; }
+        for (auto& o : g_servers) if (srv_key(o) == srv_key(v)) { toast(tr(L"That server is already in the list.")); return; }
         g_servers.push_back(v);
         g_new_name.clear(); g_new_addr.clear(); g_focus = {};
         select_server((int)g_servers.size() - 1);
         start_probe(true);
-        toast(L"Added " + v.name + L" - testing the connection...");
+        toast(tr(L"Added ") + v.name + tr(L" - testing the connection..."));
     }, !full && !trim(g_new_addr).empty());
-    text(R(MX + 16, y + 78, MW - 32, 18), L"A relay address (wss://...) or a friend's IP, e.g. 203.0.113.5 or 203.0.113.5:27777", F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 16, y + 78, MW - 32, 18), tr(L"A relay address (wss://...) or a friend's IP, e.g. 203.0.113.5 or 203.0.113.5:27777"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
     (void)h;
 }
 
@@ -1086,8 +1345,18 @@ static void paint(HDC wdc, int w, int h) {
         fill(r, mix(C_BG, C_CARD2, ta), 17);
         text(r, g_toast, F_SMALL, mix(C_BG, C_TEXT, ta), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    text(R(MX, lh - 26, MW, 18), L"Fan-made co-op mod. Not affiliated with Mob Entertainment.  \x00B7  Launcher " LAUNCHER_VERSION L"  \x00B7  mod v" MOD_VERSION,
-         F_SMALL, mix(C_DIM, C_BG, 0.35), DT_LEFT | DT_SINGLELINE);
+    bool upd = !g_latest.empty() && version_newer(g_latest, MOD_VERSION);
+    text(R(MX, lh - 26, MW - (upd ? 260 : 136), 18), L"mod v" MOD_VERSION L"  \x00B7  Launcher " LAUNCHER_VERSION L"  \x00B7  " + tr(L"Fan-made co-op mod. Not affiliated with Mob Entertainment."),
+         F_SMALL, mix(C_DIM, C_BG, 0.35), DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // what's new / newer release on GitHub
+    if (upd)
+        button(MX + MW - 250, lh - 34, 250, 28, tr(L"Update v") + g_latest + tr(L" available - download"), Btn::Primary, [] {
+            ShellExecuteW(nullptr, L"open", RELEASES_PAGE, nullptr, nullptr, SW_SHOWNORMAL);
+        });
+    else
+        button(MX + MW - 130, lh - 34, 130, 28, tr(L"What's new"), Btn::Ghost, [] {
+            MessageBoxW(g_wnd, g_lang == 1 ? WHATS_NEW_DE : WHATS_NEW, g_lang == 1 ? L"PoppyCoop " MOD_VERSION L" - was ist neu" : L"PoppyCoop " MOD_VERSION L" - what's new", MB_OK | MB_ICONINFORMATION);
+        });
 
     // cross-fade
     long long sig = theme_index() * 100000LL + (long long)g_page * 1000 + g_sel * 10 + g_view;
@@ -1163,19 +1432,37 @@ static void start_install(int ch, bool then_launch) {
     }).detach();
 }
 
+// the last room codes joined (ini [Launcher] Recent = "ABC123,XYZ789,..."), newest first
+static std::vector<std::wstring> recent_codes() {
+    std::vector<std::wstring> v;
+    std::wstring s = ini_get(L"Launcher", L"Recent"), cur;
+    for (wchar_t ch : s + L",") {
+        if (ch == L',') { if (!cur.empty() && v.size() < 4) v.push_back(cur); cur.clear(); }
+        else cur += ch;
+    }
+    return v;
+}
+static void remember_code(const std::wstring& code) {
+    if (code.empty()) return;
+    std::wstring s = code;
+    for (auto& c : recent_codes()) if (c != code) s += L"," + c;
+    ini_set(L"Launcher", L"Recent", s);
+}
+
 static void launch_now(int idx) {
     Chapter& c = g_ch[idx];
-    if (!write_mod_settings(c, g_prof)) { toast(L"Couldn't save the mod settings - try running the launcher as administrator."); return; }
-    if (!launch_game(c)) { toast(L"Couldn't start the game."); return; }
+    if (g_prof.tab == 2) remember_code(g_prof.join_code);
+    if (!write_mod_settings(c, g_prof)) { toast(tr(L"Couldn't save the mod settings - try running the launcher as administrator.")); return; }
+    if (!launch_game(c)) { toast(tr(L"Couldn't start the game.")); return; }
     g_starting_ch = idx; g_starting_t0 = GetTickCount64();
-    toast(via_steam(c) ? L"Starting Poppy Playtime - Steam may take a few seconds" : L"Starting Poppy Playtime...");
+    toast(via_steam(c) ? tr(L"Starting Poppy Playtime - Steam may take a few seconds") : tr(L"Starting Poppy Playtime..."));
 }
 
 static void do_play() {
     Chapter& c = cur();
     g_focus = {};
-    if (game_running(c)) { toast(L"The game is already running - close it to switch rooms."); return; }
-    if (g_prof.tab == 2 && extract_code(g_prof.join_code).empty()) { toast(L"Type your friend's room code first."); g_focus = { &g_prof.join_code, 12, true }; return; }
+    if (game_running(c)) { toast(tr(L"The game is already running - close it to switch rooms.")); return; }
+    if (g_prof.tab == 2 && extract_code(g_prof.join_code).empty()) { toast(tr(L"Type your friend's room code first.")); g_focus = { &g_prof.join_code, 12, true }; return; }
     if (g_prof.tab == 2) g_prof.join_code = extract_code(g_prof.join_code);
     save_profile();
     if (inst_ver(c) != MOD_VERSION) { start_install(g_sel, true); return; }
@@ -1189,7 +1476,7 @@ static void open_invite(const std::wstring& arg) {
     if (code.empty()) return;
     g_prof.join_code = code; g_prof.tab = 2; g_page = Page::Chapter;
     save_profile();
-    toast(L"Invite opened - room " + code + L". Pick the chapter and press PLAY!");
+    toast(tr(L"Invite opened - room ") + code + tr(L". Pick the chapter and press PLAY!"));
 }
 
 // ------------------------------------------------------------------ window
@@ -1282,10 +1569,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             }
             if (g_starting_ch >= 0) {
                 if (g_running[g_starting_ch]) {
-                    toast(L"Have fun! Everyone loads the same checkpoint.");
+                    toast(tr(L"Have fun! F6 = go to a friend, T = ping a spot."));
                     g_starting_ch = -1;
                 } else if (GetTickCount64() - g_starting_t0 > 45000) {
-                    toast(L"The game didn't open yet - check Steam.");
+                    toast(tr(L"The game didn't open yet - check Steam."));
                     g_starting_ch = -1;
                 }
                 changed = true;
@@ -1302,12 +1589,18 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         int idx = g_install_ch;
         iv_reset();
         if (wp && idx >= 0) { ini_set(sec_name(g_ch[idx]).c_str(), L"SetupDone", L"1"); g_setup_done[(g_ch[idx].num - 1) & 7] = 1; }
-        if (!wp) { toast(L"Install failed - close the game, or run the launcher as administrator."); g_launch_after_install = false; }
+        if (!wp) { toast(tr(L"Install failed - close the game, or run the launcher as administrator.")); g_launch_after_install = false; }
         else {
             toast(L"Co-op mod v" MOD_VERSION L" installed.");
             if (g_launch_after_install && idx >= 0) launch_now(idx);
         }
         g_launch_after_install = false;
+        InvalidateRect(h, nullptr, FALSE);
+        return 0;
+    }
+    case WM_APP_UPDATE: {
+        std::wstring* t = (std::wstring*)lp;
+        if (t) { g_latest = *t; delete t; }
         InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
@@ -1412,6 +1705,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     }
     register_protocol();
     g_theme = ini_get(L"Launcher", L"Theme", L"dark");
+    {   // language: saved choice, else the Windows UI language (German -> Deutsch)
+        std::wstring lg = ini_get(L"Launcher", L"Lang");
+        if (lg == L"de") g_lang = 1;
+        else if (lg.empty() && PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN) g_lang = 1;
+    }
     g_accent_pref = ini_get(L"Launcher", L"Accent", L"figure");
     g_anims = ini_get(L"Launcher", L"Animations", L"1") != L"0";
     apply_theme();
@@ -1447,6 +1745,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     SetTimer(g_wnd, TIMER_CARET, 530, nullptr);
     start_probe(false);
     SetTimer(g_wnd, TIMER_PROBE, 30000, nullptr);
+    std::thread([w = g_wnd] {                      // update check (once per start)
+        std::wstring* t = new std::wstring(latest_release());
+        if (!PostMessageW(w, WM_APP_UPDATE, 0, (LPARAM)t)) delete t;
+    }).detach();
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }

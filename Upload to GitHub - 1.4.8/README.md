@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.4.0.zip`** from this folder (or from Releases), unzip it,
+Download **`PoppyCoop_Launcher_1.4.8.zip`** from this folder (or from Releases), unzip it,
 and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -38,7 +38,8 @@ automatically when you press PLAY.
   entries (a friend's IP who hosts, or another relay). Every server shows how good the connection is: signal
   bars, ping, jitter and packet loss. Everyone you play with has to pick the same server.
   Hosting needs UDP port 27777 forwarded in your router and a real public IPv4 address (not DS-Lite).
-- **Launcher settings** (bottom left): theme (Dark / Midnight / Light), accent colour, animations on/off.
+- **Launcher settings** (bottom left): language (English / Deutsch), theme (Dark / Midnight / Light), accent colour,
+  animations on/off. The launcher tells you when a new version is out.
 
 ### Keys (default)
 
@@ -47,7 +48,9 @@ automatically when you press PLAY.
 | **F6** | Teleport to another player (loads their area first, so you don't fall out of the map; with 3+ players each press goes to the next one) |
 | **F7** | Buddy figure that follows you (solo testing / clips) |
 | **O / P** | Record your movement / replay it as a second player (trailer clips) |
-| **F10** | Console. Type `coop_status` to see your room and who's connected |
+| **T** | Ping: marks the spot you look at for everyone |
+| **Y** | Quick chat: each press picks the next phrase, it is sent a moment later |
+| **F10** | Status: version, fps, ping, play time, deaths and where your friends are. (`coop_status` in the console still works.) |
 
 Change them in the launcher (chapter settings). F8 and F9 are intentionally left free for other mods.
 
@@ -69,14 +72,15 @@ GrabPack can pull** (barrels, buckets, boxes, bins, ladders, toy blocks, toy box
 hits add up. Statues is an escape and stays per player.
 
 **2, 3 or more players** can share a room. Checkpoints only move forward: a player who is behind can't reset
-everyone else's "Load Game" position. Areas a friend is in stay loaded for you.
+everyone else's "Load Game" position. Areas a friend is in are loaded for you when you press F6 (or always,
+with the switch "Keep friends' areas loaded").
 
 Rooms are public, so the mod only accepts the actions it sends itself from other players (power, switches,
 puzzle steps, inventory, item pickups, moving parts with sane values). Anything else is dropped.
 
 ## Troubleshooting
 
-- **Can't see anyone:** press F10 and type `coop_status`.
+- **Can't see anyone:** press F10 (status shows the players), or type `coop_status` in the F10 console.
   - `helper=down`: `PoppyCoopNet.exe` is blocked or was removed by an antivirus. Restore it, allow it, and press PLAY again.
   - Different room: check that the code matches exactly. Copy and paste it instead of typing it.
   - Different chapter or server: everyone must pick the same chapter and the same server in the launcher.
@@ -100,6 +104,28 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.4.8
+- **One game for everyone:** levers, switches and the Game Station lights now work for everyone (the level's own
+  lever events are shared, e.g. the first power lever lights up the whole Game Station for all players).
+- **Following a friend (F6):** if your friend is further ahead, F6 first loads their checkpoint (chases and won
+  games are over for you too), then puts you next to them. No more being "caught" after you already arrived.
+- **Chases:** when a friend escapes a chase you are still in (Statues, Mommy's chase), you are brought to them
+  automatically after 3 s (launcher switch "Follow out of chases").
+- **Fixed deaths from falling through the floor** when a friend reached a checkpoint or loaded a game room, and a
+  friend's minigame (Statues, Mommy) no longer hunts you somewhere else. Friends' areas are no longer kept loaded
+  in the background by default (switch "Keep friends' areas loaded"); F6 loads them when needed.
+- **Much less lag in long sessions:** game hooks were registered again after every death and piled up (less fps
+  the longer you played). Now each one is hooked once. Object scans run far less often.
+- **Chapter 2 hands like Chapter 1:** the friend's GrabPack hand turns and grabs like the real one, its cable bends
+  around corners like the real cable and glows green when it carries power. The friend's flashlight casts light.
+- **New keys:** T = ping a spot for everyone, Y = quick chat ("Come here!", "Wait for me!", "Help!" ...),
+  F10 = status (fps, ping, play time, deaths and where your friends are: "35 m at 2 o'clock").
+- Stand on a friend's head to reach higher spots, optional respawn at a friend, friends' footsteps, distance on
+  name tags, split time at every checkpoint, smoother figures, "Connection lost / Reconnected" messages and a
+  version check when someone joins.
+- **Launcher:** German / English, update notice when a new version is out, "What's new", your last room codes as
+  buttons, "Show game log" (copies a short report for Discord), "Limit to 60 fps".
 
 ### 1.4.0
 - **New launcher (Launcher 3.0)**, written from scratch (source in `launcher-source/`):

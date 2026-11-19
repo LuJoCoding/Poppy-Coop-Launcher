@@ -1,4 +1,4 @@
-POPPY PLAYTIME CO-OP - LAUNCHER 1.4.0 (Chapter 1 + 2)
+POPPY PLAYTIME CO-OP - LAUNCHER 1.4.8 (Chapter 1 + 2)
 =====================================================
 
 Unofficial PoppyCoop Launcher 3.0 (fan mod, not by Mob Entertainment).
@@ -41,7 +41,10 @@ New compared to the original:
 - Power, switches, keys, items and checkpoints are shared
   ("Load Game" brings everyone to the furthest checkpoint).
 - For 2, 3 or more players: everyone joins the same room.
-- F6: teleport to another player (with several players each press goes to the next one).
+- F6: teleport to another player (with several players each press goes to the next one). Chapter 2: if
+  that player is at a later checkpoint, you first respawn at their checkpoint (short loading screen), so
+  chases/games they already finished are finished for you too. If a friend escapes a chase you are still
+  in, you are brought to them automatically.
   Their area is loaded first ("Loading ...'s area"), so you no longer fall out of the map.
   Keys can be changed in the launcher (chapter "Settings"; F8/F9 stay free for other mods).
 - Crash when reloading a checkpoint fixed.
@@ -56,7 +59,7 @@ Installation (Windows)
    finds it itself, otherwise "Browse": Steam -> right-click the game -> Manage -> Browse local
    files), your name and colour -> "Install co-op mod".
 3. If you used an older version: just start this launcher and press PLAY, the mod is updated to
-   1.4.0 automatically. Above PLAY it should then say "Co-op mod v1.4.0 installed". Otherwise click
+   1.4.8 automatically. Above PLAY it should then say "Co-op mod v1.4.8 installed". Otherwise click
    "Reinstall" once in "Settings".
 4. Keys and what is shared: "Settings" at the top right of the chapter. Everyone in the room should
    use the same switches.
@@ -65,9 +68,9 @@ Playing together
 ----------------
 - One player presses "Create Game" and shares the room code, everyone else presses "Join Game" and enters it.
 - Everyone loads the SAME checkpoint in the game (Play -> Load Game).
-- Everyone needs this launcher version (1.4.0), otherwise the mods don't match.
+- Everyone needs this launcher version (1.4.8), otherwise the mods don't match.
 - Firewall prompt for PoppyCoopNet.exe: "Allow".
-- F6 = teleport to another player (cycles), F7 = buddy figure, O/P = record/replay your movement.
+- F6 = teleport to another player (cycles), T = ping the spot you look at, F10 = status (fps, ping, where your friends are), Y = quick chat, F7 = buddy figure, O/P = record/replay your movement.
 - Checkpoints only move forward: a player who is behind doesn't reset the others.
 - Only share the room code with people you want to play with.
 - In game, press F10 and type "coop_status" to see the room and players.

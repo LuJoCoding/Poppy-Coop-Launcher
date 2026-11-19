@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.4.0"   -- 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.4.8"   -- 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -217,6 +217,11 @@ local function net_try_connect()
     Net.up, Net.down, Net.connected = up, down, true
     Net.players = {}
     log("connected to helper (%s)", pipe_base())
+    if Net.was_lost then
+        Net.was_lost = false
+        local P2 = _G.PoppyCoop
+        if P2 and P2.popup then pcall(P2.popup, "Reconnected") end
+    end
 end
 
 local Handlers = { event = {}, join = {}, leave = {}, tick = {}, restart = {}, unload = {}, state = {} }   -- module hooks
@@ -342,6 +347,9 @@ local function net_poll(state_line)
     end)
     if not ok then
         log("helper link lost: %s", tostring(err))
+        local P2 = _G.PoppyCoop
+        if P2 and P2.popup then pcall(P2.popup, "Connection lost - reconnecting...") end
+        Net.was_lost = true
         net_close()
         for id in pairs(Net.players) do for _, h in ipairs(Handlers.leave) do pcall(h, id) end end
         Net.players = {}
@@ -423,24 +431,94 @@ local function scan_hands(pawn)
 end
 local CH2_HANDS = { { tag = "L", ext = "Extended Hand L", obj = "Extendo Hand L" },
                     { tag = "R", ext = "Extended HandR", obj = "Extendo Hand R" } }
+-- Chapter 2 hands (like Chapter 1): the flying part of an ExtendoHand is its "Hand Rig" - the same handL_rig
+-- mesh the figure carries - played by a single-node animation (open, grab...). Sent: the rig's world
+-- position + rotation (L=x,y,z,pitch,yaw,roll,scale,...) and the animation asset + position (LA=path,pos*1000).
+-- Animation reads happen at the late point (h2_pose_job): reading a skeletal mesh's animation inside an actor
+-- tick waited on animation tasks and froze the game (bridges, see coop_extra).
+local H2 = { pose = {}, job = false, logged = false }
+local function h2_pose_job()
+    H2.job = false
+    local pawn = Game.pawn
+    if not valid(pawn) then return end
+    for _, h in ipairs(CH2_HANDS) do
+        local v = nil
+        pcall(function()
+            local a = pawn[h.obj]
+            if not a:IsValid() then return end
+            local c = a["Hand Rig"]
+            local ai = c.AnimScriptInstance
+            if not ai or ai:GetAddress() == 0 then return end
+            local as = ai.CurrentAsset
+            if as and as:GetAddress() ~= 0 then
+                local path = as:GetFullName():match("^%S+ (.+)$")
+                if path and not path:find("[%s,]") then v = ("%s,%d"):format(path, math.floor(c:GetPosition() * 1000 + 0.5)) end
+            end
+        end)
+        H2.pose[h.tag] = v
+        if v and not H2.logged then H2.logged = true; log("hand pose sync: %s", v) end
+    end
+end
+-- the real cable (Extendo_Rope "Rope Points Array": launcher end, corners it wraps around, hand end): only the
+-- corners are sent - points near the launcher or the hand are left out
+function H2.rope_corners(pawn, tag, hand)
+    local r = try(function() local x = pawn["ExtendoRope " .. tag]; return x:IsValid() and x or nil end)
+    if not r then return nil end
+    local pts = {}
+    pcall(function()
+        r["Rope Points Array"]:ForEach(function(_, e) local v = e:get(); pts[#pts + 1] = { v.X, v.Y, v.Z } end)
+    end)
+    if #pts < 3 then return nil end
+    local first = pts[1]
+    local out = {}
+    for i = 2, #pts - 1 do
+        local v = pts[i]
+        local d1 = (v[1] - first[1]) ^ 2 + (v[2] - first[2]) ^ 2 + (v[3] - first[3]) ^ 2
+        local d2 = (v[1] - hand.X) ^ 2 + (v[2] - hand.Y) ^ 2 + (v[3] - hand.Z) ^ 2
+        if d1 > 40 * 40 and d2 > 40 * 40 and #out < 8 then out[#out + 1] = ("%.0f,%.0f,%.0f"):format(v[1], v[2], v[3]) end
+    end
+    return #out > 0 and table.concat(out, ";") or nil
+end
 local function hand_tokens_ch2(pawn, loc)
     local out = ""
+    local any = false
     for _, h in ipairs(CH2_HANDS) do
         local a = try(function() return pawn[h.obj] end)
         if a and valid(a) then
+            local rig = try(function() local c = a["Hand Rig"]; return c:IsValid() and c or nil end)
+            local hl, hr, sc
+            if rig then
+                pcall(function() hl, hr, sc = rig:K2_GetComponentLocation(), rig:K2_GetComponentRotation(), rig:K2_GetComponentScale() end)
+            end
             -- the ExtendoHand actor stays at the launcher; its "Hand Pivot" component is what flies
-            local hl = try(function() return a["Hand Pivot"]:K2_GetComponentLocation() end)
+            hl = hl or try(function() return a["Hand Pivot"]:K2_GetComponentLocation() end)
                 or try(function() return a.Palm:K2_GetComponentLocation() end)
             if hl then
                 local dx, dy, dz = hl.X - loc.X, hl.Y - loc.Y, hl.Z - loc.Z
                 local d2 = dx * dx + dy * dy + dz * dz
                 -- the ExtendoHand actor only exists while the hand is out: send it from the first frame
                 if d2 > 20 * 20 and d2 < 4000 * 4000 then
-                    out = out .. (" %s=%.0f,%.0f,%.0f"):format(h.tag, hl.X, hl.Y, hl.Z)
+                    if hr and sc then
+                        out = out .. (" %s=%.0f,%.0f,%.0f,%d,%d,%d,%d,100,0,0"):format(h.tag, hl.X, hl.Y, hl.Z,
+                            math.floor(hr.Pitch + 0.5), math.floor(hr.Yaw + 0.5), math.floor(hr.Roll + 0.5), math.floor(math.abs(sc.X) * 1000 + 0.5))
+                        local pose = H2.pose[h.tag]
+                        if pose then out = out .. (" %sA=%s"):format(h.tag, pose) end
+                        local corners = H2.rope_corners(pawn, h.tag, hl)
+                        if corners then out = out .. (" %sP=%s"):format(h.tag, corners) end
+                        -- power flowing through the cable (green hand carrying electricity)
+                        local el = (tonumber(try(function() return pawn[h.tag .. " Rope Electricity Travel"] end)) or 0)
+                            + (tonumber(try(function() return pawn[h.tag .. " In Rope Electricity Travel"] end)) or 0)
+                        if el > 0.01 then out = out .. (" %sE=1"):format(h.tag) end
+                        any = true
+                    else
+                        out = out .. (" %s=%.0f,%.0f,%.0f"):format(h.tag, hl.X, hl.Y, hl.Z)
+                    end
                 end
             end
         end
     end
+    if any and not H2.job then H2.job = true; late(h2_pose_job, "hand_pose2") end
+    if not any then H2.pose = {} end
     return out
 end
 -- runs at UE4SS's game-thread point (not inside an actor tick): reads the launched hands' bone transform
@@ -479,7 +557,9 @@ local function hand_tokens(pawn, loc)
         return ok and s or ""
     end
     if HandScan.off then return "" end
-    if game_time - HandScan.at > 3 then scan_hands(pawn) end
+    -- both hands found (they live as long as the pawn): look again only every 30 s; FindAllOf walks every
+    -- engine object (~12 ms) and ran every 3 s
+    if game_time - HandScan.at > ((#HandScan.list >= 2 and HandScan.owned) and 30 or 3) then scan_hands(pawn) end
     if HandScan.want and not HandScan.job then        -- bone + grab state of the real hands: read late
         HandScan.job = true
         late(function() hand_pose_job() end, "hand_pose")
@@ -1038,6 +1118,149 @@ local function aim_rotation(rr, face_yaw, dpitch, dyaw)
 end
 
 -- per frame: place the figure, pick its animation, fly the hands, recolour the green hand
+-- one cylinder per cable segment; the first is the figure's own "cable" actor, more are spawned when the real
+-- cable wraps around corners (kept hidden for later)
+local Cab = { MAX_SEGS = 9 }
+function Cab.seg(a, A, B)
+    local lx, ly, lz = B[1] - A[1], B[2] - A[2], B[3] - A[3]
+    local len = math.sqrt(lx * lx + ly * ly + lz * lz)
+    if len < 3 then a:SetActorHiddenInGame(true); return end
+    a:SetActorHiddenInGame(false)
+    a:K2_SetActorLocationAndRotation({ X = (A[1] + B[1]) / 2, Y = (A[2] + B[2]) / 2, Z = (A[3] + B[3]) / 2 },
+        { Pitch = 90 + math.deg(math.atan(lz, math.sqrt(lx * lx + ly * ly))), Yaw = math.deg(math.atan(ly, lx)), Roll = 0 }, false, {}, true)
+    a:SetActorScale3D({ X = 0.025, Y = 0.025, Z = len / 100 })
+end
+function Cab.cable(p, tag, path, elec)
+    local f = p.f2
+    local segs = f["segs" .. tag]
+    if not segs then
+        segs = { f["cable" .. tag] }
+        f["segs" .. tag] = segs
+    end
+    local need = path and (#path - 1) or 0
+    if need > Cab.MAX_SEGS then need = Cab.MAX_SEGS end
+    for i = #segs + 1, need do                     -- more corners than cylinders: spawn one more
+        local cab = f2_spawn(F2A.sma, path[1][1], path[1][2], path[1][3])
+        if not cab then break end
+        pcall(function()
+            local c = cab.StaticMeshComponent
+            c:SetMobility(2)
+            c:SetStaticMesh(F2A.cable)
+            c:SetMaterial(0, f.cablemat or f2_tint(TARGET_RGB.black))
+            c:SetCollisionEnabled(0)
+            c:SetCastShadow(false)
+        end)
+        segs[i] = cab
+        f["elec" .. tag] = nil              -- re-apply the cable colour below (also to the new segment)
+        p.parts[#p.parts + 1] = cab
+        p.paths[#p.parts] = try(function() return cab:GetFullName():match("^%S+ (.+)$") end)
+    end
+    -- powered cable glows green (the material is swapped only when the state changes)
+    elec = elec and true or false
+    if f["elec" .. tag] ~= elec then
+        f["elec" .. tag] = elec
+        if elec and not f.cable_on then f.cable_on = f2_tint({ 0.6, 4.0, 0.5 }) end
+        if not f.cable_off then f.cable_off = f2_tint(TARGET_RGB.black) end
+        local m = elec and f.cable_on or f.cable_off
+        for _, a in ipairs(segs) do if valid(a) then pcall(function() a.StaticMeshComponent:SetMaterial(0, m) end) end end
+    end
+    for i, a in ipairs(segs) do
+        if valid(a) then
+            pcall(function()
+                if i <= need then
+                    local B = (i == need) and path[#path] or path[i + 1]
+                    Cab.seg(a, path[i], B)
+                else a:SetActorHiddenInGame(true) end
+            end)
+        end
+    end
+end
+
+function Cab.flashlight(p, st, c, crouch)
+    local f = p.f2
+    local on = (st.flags & 4) ~= 0 and (st.flags & 16) == 0
+    if on and not valid(f.light) and not f.light_failed then
+        F2A.spot = F2A.spot or find_asset("/Script/Engine.SpotLight")
+        local a = valid(F2A.spot) and f2_spawn(F2A.spot, c.x, c.y, c.z + 60)
+        if a then
+            local ok = pcall(function()
+                local l = a.SpotLightComponent
+                l:SetMobility(2)
+                l:SetIntensity(4500)
+                l:SetAttenuationRadius(2200)
+                l:SetInnerConeAngle(12)
+                l:SetOuterConeAngle(28)
+                l:SetCastShadows(false)
+                l:SetLightColor({ R = 1.0, G = 0.95, B = 0.85, A = 1.0 }, true)
+            end)
+            if ok then
+                f.light = a
+                p.parts[#p.parts + 1] = a           -- destroyed with the figure
+                p.paths[#p.parts] = try(function() return a:GetFullName():match("^%S+ (.+)$") end)
+            else f.light_failed = true; pcall(function() a:K2_DestroyActor() end) end
+        elseif F2A.spot then f.light_failed = true end
+    end
+    if not valid(f.light) then return end
+    pcall(function()
+        f.light:SetActorHiddenInGame(not on)
+        if on then
+            f.light:K2_SetActorLocationAndRotation({ X = c.x, Y = c.y, Z = c.z + (crouch and 25 or 60) },
+                { Pitch = st.pitch or 0, Yaw = st.yaw or c.yaw, Roll = 0 }, false, {}, true)
+        end
+    end)
+end
+-- footsteps of a walking/running figure: the player's own footstep sounds (Chapter 2), played at the figure
+Cab.STEP_CUES = { walk = "/Game/Assets/SFX/Characters/Player/PlayerWalk/footsteps/concreteWalk_Cue.concreteWalk_Cue",
+                    run = "/Game/Assets/SFX/Characters/Player/PlayerWalk/footsteps/concreteRun_Cue.concreteRun_Cue" }
+function Cab.footsteps(p, c, spd, quiet, dt)
+    if CHAPTER ~= 2 or Config.footsteps == false or Config.footsteps == "false" then return end
+    if quiet or spd < 60 then p.step_t = 0; return end
+    local run = spd > 330
+    local every = run and 0.32 or 0.5
+    p.step_t = (p.step_t or 0) + dt
+    if p.step_t < every then return end
+    p.step_t = 0
+    local key = run and "step_run" or "step_walk"
+    if not valid(F2A[key]) then F2A[key] = find_asset(Cab.STEP_CUES[run and "run" or "walk"]) end
+    local cue = F2A[key]
+    local gs = SafeUE.gameplay_statics()
+    if not (valid(cue) and gs) then return end
+    pcall(function()
+        gs:PlaySoundAtLocation(Game.pawn, cue, { X = c.x, Y = c.y, Z = c.z - 85 }, { Pitch = 0, Yaw = 0, Roll = 0 }, 0.7, 1.0, 0.0, nil, nil, nil)
+    end)
+end
+-- boost: an invisible block on the figure's head you can stand on (reach higher places together).
+-- Off while the friend is dead/airborne; config boost=false turns it off.
+function Cab.boost(p, st, c, crouch, dead)
+    if Config.boost == false or Config.boost == "false" then return end
+    local f = p.f2
+    if not valid(f.boost) and not f.boost_failed then
+        F2A.cube = F2A.cube or find_asset("/Engine/BasicShapes/Cube.Cube")
+        if not valid(F2A.cube) then return end
+        local a = f2_spawn(F2A.sma, c.x, c.y, c.z + 200)
+        if not a then f.boost_failed = true; return end
+        local ok = pcall(function()
+            local m = a.StaticMeshComponent
+            m:SetMobility(2)
+            m:SetStaticMesh(F2A.cube)
+            a:SetActorScale3D({ X = 0.45, Y = 0.45, Z = 0.08 })
+            a:SetActorEnableCollision(true)
+            m:SetCollisionProfileName(FName("BlockAllDynamic"), true)
+            m:SetCollisionEnabled(3)
+            a:SetActorHiddenInGame(true)
+        end)
+        if not ok then f.boost_failed = true; pcall(function() a:K2_DestroyActor() end); return end
+        f.boost = a
+        p.parts[#p.parts + 1] = a
+        p.paths[#p.parts] = try(function() return a:GetFullName():match("^%S+ (.+)$") end)
+    end
+    if not valid(f.boost) then return end
+    local off = dead or (p.air or 0) > 0.5
+    pcall(function()
+        f.boost:K2_SetActorLocation({ X = c.x, Y = c.y, Z = off and (c.z - 5000) or (c.z + (crouch and 30 or 92)) }, false, {}, true)
+    end)
+end
+_G.PoppyCoop_cab = Cab      -- dev tests
 local function f2_update(p, st, c, dt, crouch, dead)
     local f = p.f2
     if not valid(f.body) then return end
@@ -1050,6 +1273,7 @@ local function f2_update(p, st, c, dt, crouch, dead)
     elseif spd > 330 then f2_play(f, "run", math.max(0.7, math.min(1.5, spd / 420)))
     elseif spd > 30 then f2_play(f, "walk", math.max(0.5, math.min(1.6, spd / 160)))
     else f2_play(f, "idle", 1) end
+    Cab.footsteps(p, c, spd, air or dead or crouch, dt)
     pcall(function()
         -- the dummy's crouch animations lift the feet ~56 cm off the root (measured: ankles at 63-65 instead of
         -- 8) - lower the figure while they play, or a crouching player floats
@@ -1078,33 +1302,50 @@ local function f2_update(p, st, c, dt, crouch, dead)
                 local hx, hy, hz = rest.x + (tgt.x - rest.x) * e, rest.y + (tgt.y - rest.y) * e, rest.z + (tgt.z - rest.z) * e
                 local vx, vy, vz = tgt.x - rest.x, tgt.y - rest.y, tgt.z - rest.z
                 local rr = f["rrot" .. tag]
-                local ap, ay, ar = aim_rotation(rr, c.yaw, math.deg(math.atan(vz, math.sqrt(vx * vx + vy * vy))), math.deg(math.atan(vy, vx)))
+                local ap, ay, ar
+                if tgt.rot then ap, ay, ar = tgt.rot[1], tgt.rot[2], tgt.rot[3]       -- the real hand rig's rotation
+                else ap, ay, ar = aim_rotation(rr, c.yaw, math.deg(math.atan(vz, math.sqrt(vx * vx + vy * vy))), math.deg(math.atan(vy, vx))) end
+                -- the real hand's animation (open / grab / hold): same asset and position on our hand rig
+                if tgt.anim and tgt.anim ~= f["pose" .. tag] then
+                    f["pose" .. tag] = tgt.anim
+                    local path, pos = tgt.anim:match("^(.+),(%d+)$")
+                    F2A.handanim = F2A.handanim or {}
+                    local asset = path and F2A.handanim[path]
+                    if path and not valid(asset) then asset = find_asset(path); F2A.handanim[path] = asset end
+                    if valid(asset) then
+                        pcall(function()
+                            local sk = h.SkeletalMeshComponent
+                            if f["panim" .. tag] ~= path then sk:PlayAnimation(asset, false); f["panim" .. tag] = path end
+                            sk:SetPosition(tonumber(pos) / 1000, false)
+                        end)
+                    end
+                end
                 pcall(function()
                     h:K2_SetActorLocationAndRotation({ X = hx, Y = hy, Z = hz }, { Pitch = ap, Yaw = ay, Roll = ar }, false, {}, true)
                 end)
-                -- cable: thin black cylinder (100 tall along Z) from the launcher to the hand
-                local lx, ly, lz = hx - rest.x, hy - rest.y, hz - rest.z
-                local len = math.sqrt(lx * lx + ly * ly + lz * lz)
-                if valid(cab) then
-                    pcall(function()
-                        if len > 5 then
-                            cab:SetActorHiddenInGame(false)
-                            -- the hand's origin sits a little below the launcher tube: lift the cable onto the tube axis
-                            local lift = -F2_HAND.L[3] * g:GetActorScale3D().X
-                            cab:K2_SetActorLocationAndRotation({ X = (rest.x + hx) / 2, Y = (rest.y + hy) / 2, Z = (rest.z + hz) / 2 + lift },
-                                { Pitch = 90 + math.deg(math.atan(lz, math.sqrt(lx * lx + ly * ly))), Yaw = math.deg(math.atan(ly, lx)), Roll = 0 }, false, {}, true)
-                            cab:SetActorScale3D({ X = 0.025, Y = 0.025, Z = len / 100 })
-                        else
-                            cab:SetActorHiddenInGame(true)
-                        end
-                    end)
-                end
+                -- cable: thin black cylinders (100 tall along Z) from the launcher over the corners the real cable
+                -- wraps around (sent as LP=...) to the hand
+                local lift = 0
+                pcall(function() lift = -F2_HAND.L[3] * g:GetActorScale3D().X end)   -- hand origin sits below the tube axis
+                local path = { { rest.x, rest.y, rest.z + lift } }
+                for _, cp in ipairs(e > 0.9 and tgt.corners or {}) do path[#path + 1] = cp end
+                path[#path + 1] = { hx, hy, hz + lift }
+                Cab.cable(p, tag, path, tgt.elec)
             elseif f["free" .. tag] then
                 f2_hand_attach(p, tag)
+                Cab.cable(p, tag, nil)
+                if f["panim" .. tag] then       -- back on the launcher: open hand again (reference pose)
+                    pcall(function() h.SkeletalMeshComponent:Stop() end)
+                    pcall(function() h.SkeletalMeshComponent:SetPosition(0, false) end)
+                    f["panim" .. tag], f["pose" .. tag] = nil, nil
+                end
                 if valid(cab) then pcall(function() cab:SetActorHiddenInGame(true) end) end
             end
         end
     end
+    -- flashlight (state flag 4): a real spot light from the figure's head along the player's view (no shadows: cheap)
+    Cab.flashlight(p, st, c, crouch)
+    Cab.boost(p, st, c, crouch, dead)
     -- green hand: the right hand takes the green colour while the player has it
     local green = (st.flags & 32) ~= 0
     if green ~= f.green then
@@ -1144,11 +1385,21 @@ local function parse_state(s)
                 h.sc = math.max(0.02, math.min(2, n[7] / 1000))
                 h.dist, h.thick, h.bits = math.max(0, math.min(1000, n[8])), math.max(0, math.min(1000, n[9])), n[10] & 15
             end
+            h.anim = s:match(" " .. tag .. "A=(%S+)")          -- Chapter 2: hand animation "path,pos*1000"
+            h.elec = s:find(" " .. tag .. "E=1", 1, true) ~= nil  -- Chapter 2: power flows through the cable
+            local cs = s:match(" " .. tag .. "P=([%-%d,;]+)")   -- Chapter 2: corners the cable wraps around
+            if cs then
+                h.corners = {}
+                for x, y, z in cs:gmatch("(%-?%d+),(%-?%d+),(%-?%d+)") do
+                    if #h.corners < 8 then h.corners[#h.corners + 1] = { tonumber(x), tonumber(y), tonumber(z) } end
+                end
+            end
             hands[tag] = h
         end
     end
     return { x = tonumber(x), y = tonumber(y), z = tonumber(z), yaw = tonumber(yaw), pitch = tonumber(pitch),
-             flags = tonumber(flags), map = map, color = colour, hands = hands }
+             flags = tonumber(flags), map = map, color = colour, hands = hands,
+             cp = tonumber(s:match(" C=(%-?%d+)")) }        -- checkpoint the sender's world is at (coop_world)
 end
 
 ------------------------------------------------------------ Chapter 1 GrabPack figure
@@ -1626,12 +1877,28 @@ local function update_puppets(dt)
             -- vertical speed from consecutive updates; while airborne, predict ahead so the figure's
             -- jump reaches the real height instead of being flattened by the smoothing
             if p.st_t ~= pl.state_time then
-                if p.st_t and pl.state_time and pl.state_time > p.st_t then p.vz = (st.z - p.st_z) / (pl.state_time - p.st_t) end
-                p.st_t, p.st_z = pl.state_time, st.z
+                if p.st_t and pl.state_time and pl.state_time > p.st_t then
+                    local gap = pl.state_time - p.st_t
+                    p.vz = (st.z - p.st_z) / gap
+                    -- horizontal velocity too (smoothed): the figure is predicted a little ahead instead of
+                    -- trailing ~70 ms behind and stuttering when updates arrive unevenly
+                    local vx, vy = (st.x - p.st_x) / gap, (st.y - p.st_y) / gap
+                    if vx * vx + vy * vy > 1500 * 1500 then vx, vy = 0, 0 end      -- teleport, not walking
+                    if vx * vx + vy * vy < 40 * 40 then p.vx, p.vy = 0, 0       -- stopped: no prediction (no overshoot)
+                    else
+                        p.vx = (p.vx or 0) + (vx - (p.vx or 0)) * 0.5
+                        p.vy = (p.vy or 0) + (vy - (p.vy or 0)) * 0.5
+                    end
+                end
+                p.st_t, p.st_z, p.st_x, p.st_y = pl.state_time, st.z, st.x, st.y
             end
             local tz = st.z
             if (st.flags & 8) ~= 0 and p.vz and pl.state_time then
                 tz = st.z + p.vz * math.min(0.08, math.max(0, game_time - pl.state_time))
+            end
+            if p.vx and pl.state_time then
+                local ahead = math.min(0.07, math.max(0, game_time - pl.state_time))
+                dx, dy = st.x + p.vx * ahead - c.x, st.y + p.vy * ahead - c.y
             end
             dz = tz - c.z
             if dx * dx + dy * dy + dz * dz > 600 * 600 then
@@ -1670,6 +1937,7 @@ local function update_puppets(dt)
                     else local k = math.min(1, dt * 18); cur.x, cur.y, cur.z = cur.x + (h.x - cur.x) * k, cur.y + (h.y - cur.y) * k, cur.z + (h.z - cur.z) * k end
                     local hc = p.hand[tag]
                     hc.rot, hc.sc, hc.dist, hc.thick, hc.bits = h.rot, h.sc, h.dist, h.thick, h.bits   -- real hand pose (Chapter 1)
+                    hc.anim, hc.corners, hc.elec = h.anim, h.corners, h.elec                           -- (Chapter 2)
                 end
                 p.ext[tag] = p.ext[tag] + ((h and 1 or 0) - p.ext[tag]) * math.min(1, dt * (h and 16 or 9))
             end
@@ -1798,6 +2066,14 @@ local function update_puppets(dt)
                 pcall(function()
                     p.tag:K2_SetActorLocationAndRotation({ X = c.x, Y = c.y, Z = headZ + 32 }, { Pitch = 0, Yaw = yaw, Roll = 0 }, false, {}, true)
                 end)
+                -- far away: show the distance ("LuJo - 34 m"); the text only changes in 5 m steps
+                local d = math.sqrt((my.X - c.x) ^ 2 + (my.Y - c.y) ^ 2 + (my.Z - c.z) ^ 2) / 100
+                local label = (pl and pl.name or ("P" .. id)) .. (d >= 15 and (" - %d m"):format(math.floor(d / 5 + 0.5) * 5) or "")
+                if p.say and game_time < (p.say_until or 0) then label = label .. ": " .. p.say end
+                if label ~= p.tag_text and FText then
+                    p.tag_text = label
+                    pcall(function() p.tag.TextRender:K2_SetText(FText(label)) end)
+                end
             end
         elseif p then
             destroy_puppet(id)
@@ -1967,6 +2243,12 @@ local Tp = nil            -- running teleport: { id, name, phase = "load"|"guard
 local TP_LOAD_WAIT = 10   -- s: longest wait for the friend's area to load before teleporting anyway
 local TP_GUARD = 5        -- s: after the teleport, watch for a fall through a missing floor
 local TP_FALL = 600       -- cm below the friend = falling out of the map
+-- Following a player who is at a later checkpoint (Chapter 2): the game respawns us at their checkpoint
+-- first (its own RestartLevel path: that part of the world - chase over, game won, doors - is then in the
+-- right state), then the normal teleport runs. { name, phase = "restart"|"loading", t }
+local Follow = nil
+local FOLLOW_SETTLE = 3   -- s after the respawn before teleporting to the friend
+local FOLLOW_TIMEOUT = 25 -- s: the restart never happened -> give up
 
 local function tp_say(msg)
     log("%s", msg)
@@ -2005,8 +2287,41 @@ local function teleport_to_friend(want)
     if TpLast then for _, id in ipairs(ids) do if id > TpLast then pick = id; break end end end
     TpLast = pick
     local name = Net.players[pick].name or ("player " .. pick)
+    local P2 = _G.PoppyCoop
+    local st = tp_target(pick)
+    if CHAPTER == 2 and not Follow and st and st.cp and P2 and P2.cp_info and P2.respawn_at_cp then
+        local _, mine = P2.cp_info()
+        if st.cp > mine then
+            Follow = { name = name, phase = "restart", t = game_time }
+            tp_say(("Loading %s's checkpoint (%d)..."):format(name, st.cp))
+            local ok, r = pcall(P2.respawn_at_cp, st.cp)
+            if ok and r then return end
+            log("follow: respawn failed (%s), teleporting directly", tostring(r))
+            Follow = nil
+        end
+    end
     Tp = { id = pick, name = name, phase = "load", t0 = game_time, tries = 0 }
     tp_say("Loading " .. name .. "'s area...")
+end
+
+local function follow_tick()
+    if not Follow then return end
+    if Follow.phase == "restart" then
+        if game_time - Follow.t > FOLLOW_TIMEOUT then log("follow: no respawn happened"); Follow = nil end
+        return
+    end
+    if not valid(Game.pawn) or Game.loading then Follow.t = nil; return end
+    Follow.t = Follow.t or game_time
+    if game_time - Follow.t < FOLLOW_SETTLE then return end
+    local name = Follow.name
+    Follow = nil
+    teleport_to_friend(name)
+end
+table.insert(Handlers.unload, function() if Follow then Follow.phase, Follow.t = "loading", nil end end)
+-- coop_world: a friend just finished a chase we are still in -> follow them (same as F6)
+_G.PoppyCoop_follow = function(id)
+    local pl = Net.players[id]
+    if pl and pl.name and not Follow and not Tp then teleport_to_friend(pl.name) end
 end
 
 local function tp_tick()
@@ -2038,9 +2353,102 @@ local function tp_tick()
     end
     if game_time - Tp.t1 > TP_GUARD then Tp = nil end
 end
+-- Ping (default T): marks the spot you look at for everyone - a red "! name" for 6 s and a message with the
+-- distance. Line trace from the camera (UE4SS fills the HitResult out-parameter table).
+local Ping = { req = false, list = {}, TIME = 6, RANGE = 6000 }   -- list: { a = text actor, t = remove time, x, y, z }; RANGE in cm
+function Ping.ping_popup(msg)
+    local P2 = _G.PoppyCoop
+    if P2 and P2.popup then pcall(P2.popup, msg) end
+end
+function Ping.ping_spawn(name, x, y, z)
+    local a = spawn_tag("! " .. name, x, y, z + 30)
+    if not a then return end
+    pcall(function()
+        local t = a.TextRender
+        t:SetWorldSize(60)
+        t:SetTextRenderColor({ R = 255, G = 60, B = 50, A = 255 })
+    end)
+    Ping.list[#Ping.list + 1] = { a = a, t = game_time + Ping.TIME, x = x, y = y, z = z + 30 }
+end
+function Ping.ping_target()
+    local pawn = Game.pawn
+    local pc = valid(pawn) and try(function() return pawn:GetController() end)
+    local cm = pc and try(function() return pc.PlayerCameraManager end)
+    if not valid(cm) then return nil end
+    local loc, rot = cm:GetCameraLocation(), cm:GetCameraRotation()
+    local mml = StaticFindObject("/Script/Engine.Default__KismetMathLibrary")
+    local ksl = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    local f = mml:GetForwardVector(rot)
+    local a = { X = loc.X + f.X * 40, Y = loc.Y + f.Y * 40, Z = loc.Z + f.Z * 40 }
+    local b = { X = loc.X + f.X * Ping.RANGE, Y = loc.Y + f.Y * Ping.RANGE, Z = loc.Z + f.Z * Ping.RANGE }
+    local hit = {}
+    local ok = try(function() return ksl:LineTraceSingle(pawn, a, b, 0, false, { pawn }, 0, hit, true,
+        { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0) end)
+    local p = ok == true and hit.ImpactPoint or b
+    return p.X, p.Y, p.Z
+end
+function Ping.do_ping()
+    if not valid(Game.pawn) then return end
+    local x, y, z = Ping.ping_target()
+    if not x then return end
+    Ping.ping_spawn(tostring(Config.name or "you"), x, y, z)
+    if Coop.active() then Coop.send_event("ping", ("%.0f %.0f %.0f %s"):format(x, y, z, Game.map)) end
+end
+function Ping.pings_tick()
+    if #Ping.list == 0 then return end
+    local my = valid(Game.pawn) and try(function() return Game.pawn:K2_GetActorLocation() end)
+    for i = #Ping.list, 1, -1 do
+        local e = Ping.list[i]
+        if game_time > e.t or not valid(e.a) then
+            if valid(e.a) then pcall(function() e.a:K2_DestroyActor() end) end
+            table.remove(Ping.list, i)
+        elseif my then
+            local yaw = math.deg(math.atan(my.Y - e.y, my.X - e.x))
+            pcall(function() e.a:K2_SetActorRotation({ Pitch = 0, Yaw = yaw, Roll = 0 }, false) end)
+        end
+    end
+end
+table.insert(Handlers.unload, function() Ping.list = {} end)   -- the engine destroys the actors with the level
+_G.PoppyCoop_ping = function() Ping.req = true end          -- console/dev
+-- quick chat (default Y): each press shows the next phrase; 1.5 s after the last press it is sent. Everyone gets a
+-- message and the phrase floats above the sender's figure for a few seconds.
+Ping.PHRASES = { "Come here!", "Wait for me!", "Help!", "Follow me!", "Go ahead, I follow", "Over here!", "Thanks!", "Sorry!" }
+function Ping.chat_press()
+    Ping.chat_pick = ((Ping.chat_pick or 0) % #Ping.PHRASES) + 1
+    Ping.chat_at = game_time + 1.5
+    Ping.ping_popup(("Say: %s  (Y = next)"):format(Ping.PHRASES[Ping.chat_pick]))
+end
+function Ping.chat_send()
+    local i = Ping.chat_pick
+    Ping.chat_pick = nil
+    if not i then return end
+    if Coop.active() then Coop.send_event("chat", tostring(i)) end
+    Ping.ping_popup(("You: %s"):format(Ping.PHRASES[i]))
+end
+Coop.on("chat", function(from, rest)
+    local i = tonumber(rest)
+    local msg = i and Ping.PHRASES[i]
+    if not msg then return end
+    local pl = Net.players[from]
+    Ping.ping_popup(("%s: %s"):format(pl and pl.name or "?", msg))
+    local p = Puppets[from]
+    if p then p.say, p.say_until = msg, game_time + 5 end
+end)
+Coop.on("ping", function(from, rest)
+    local x, y, z, map = rest:match("^(%-?%d+) (%-?%d+) (%-?%d+) (%S+)")
+    if not x or map ~= Game.map or not valid(Game.pawn) then return end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    local pl = Net.players[from]
+    local name = pl and pl.name or "?"
+    Ping.ping_spawn(name, x, y, z)
+    local my = try(function() return Game.pawn:K2_GetActorLocation() end)
+    local d = my and math.sqrt((my.X - x) ^ 2 + (my.Y - y) ^ 2 + (my.Z - z) ^ 2) / 100
+    Ping.ping_popup(d and ("%s pinged a spot %.0f m away"):format(name, d) or (name .. " pinged a spot"))
+end)
+
 -- Keys come from ue4ss\Mods\PoppyCoop\keybinds.txt (written with the defaults on first run).
 -- Names are UE4SS key names: F1..F12, A..Z, ONE..NINE, NUM_ZERO..NUM_NINE, INS, HOME, END, PAGE_UP ...
-local KB = { teleport = "F6", buddy = "F7", record = "O", play = "P" }
+local KB = { teleport = "F6", buddy = "F7", record = "O", play = "P", ping = "T", status = "F10", chat = "Y" }
 do
     local fn = MOD_DIR .. "\\keybinds.txt"
     local f = io.open(fn, "r")
@@ -2057,13 +2465,16 @@ do
         f = io.open(fn, "w")
         if f then
             f:write("# PoppyCoop keys - change a key, save, restart the game. F8/F9 are left free for other mods.\n")
-            for _, k in ipairs({ "teleport", "buddy", "record", "play" }) do f:write(k, "=", KB[k], "\n") end
+            for _, k in ipairs({ "teleport", "buddy", "record", "play", "ping", "status", "chat" }) do f:write(k, "=", KB[k], "\n") end
             f:close()
         end
     end
 end
 local function bind(name, fn) pcall(function() RegisterKeyBind(Key[KB[name]], fn) end) end
 bind("teleport", function() TpReq = true end)
+bind("ping", function() Ping.req = true end)
+bind("status", function() Game.status_req = true end)
+bind("chat", function() Game.chat_req = true end)
 bind("buddy", function() Ghost.keys[#Ghost.keys + 1] = "buddy" end)
 bind("record", function() Ghost.keys[#Ghost.keys + 1] = "record" end)
 bind("play", function() Ghost.keys[#Ghost.keys + 1] = "play" end)
@@ -2075,6 +2486,36 @@ local send_accum, last_sent, last_sent_t = 0, nil, 0
 -- perf report (every 15 s) only for developers: create ue4ss\Mods\PoppyCoop\perf_on.txt
 local PERF_LOG = (function() local f = io.open(MOD_DIR .. "\\perf_on.txt", "r"); if f then f:close(); return true end return false end)()
 local Perf = { frames = 0, real = 0, lua = 0, hooks = 0, by = {}, sec = {} }
+-- status key (default F10): fps, mod cost, ping, players, version, checkpoint as an on-screen message
+function Ping.status()
+    local P2 = _G.PoppyCoop
+    if not (P2 and P2.popup) then return end
+    local fps = Perf.real > 0.5 and Perf.frames / Perf.real or 0
+    local ms = Perf.frames > 0 and Perf.lua / Perf.frames * 1000 or 0
+    local n = 0
+    for id in pairs(Net.players) do if id < 900 then n = n + 1 end end
+    local cp = P2.cp_info and select(2, P2.cp_info()) or -1
+    local t = math.floor(game_time)
+    pcall(P2.popup, ("v%s | %.0f fps | mod %.1f ms | ping %s | %d other player%s%s | %d:%02d:%02d played, %d death%s"):format(VERSION, fps, ms,
+        (Net.rtt and Net.rtt >= 0) and (Net.rtt .. " ms") or "-", n, n == 1 and "" or "s", cp >= 0 and (" | checkpoint " .. cp) or "",
+        t // 3600, t // 60 % 60, t % 60, Game.deaths or 0, (Game.deaths or 0) == 1 and "" or "s"))
+    -- where everyone is: distance and direction like a clock (12 = straight ahead)
+    local my = valid(Game.pawn) and try(function() return Game.pawn:K2_GetActorLocation() end)
+    local view = valid(Game.pawn) and try(function() return Game.pawn:GetController():GetControlRotation().Yaw end)
+    if not (my and view) then return end
+    for id, pl in pairs(Net.players) do
+        local st = id < 900 and pl.state and parse_state(pl.state)
+        if st then
+            local dx, dy = st.x - my.X, st.y - my.Y
+            local d = math.sqrt(dx * dx + dy * dy + (st.z - my.Z) ^ 2) / 100
+            local rel = (math.deg(math.atan(dy, dx)) - view) % 360
+            local clock = math.floor(rel / 30 + 0.5) % 12
+            if clock == 0 then clock = 12 end
+            local updown = (st.z - my.Z) > 300 and ", above" or ((st.z - my.Z) < -300 and ", below" or "")
+            pcall(P2.popup, ("%s: %.0f m at %d o'clock%s%s"):format(pl.name or "?", d, clock, updown, st.map ~= Game.map and " (other map)" or ""))
+        end
+    end
+end
 local function tick(dt)
     game_time = game_time + dt
     if Game.loading then return end     -- a level is loading: don't touch any engine object
@@ -2111,7 +2552,17 @@ local function tick(dt)
     if have then update_puppets(dt) end
     crumb("after update_puppets")
     Perf.sec.figures = (Perf.sec.figures or 0) + os.clock() - c0
+    if Game.respawn_tp_at and have and game_time > Game.respawn_tp_at then
+        Game.respawn_tp_at = nil
+        if next(Net.players) and not Tp then log("respawned: going to a friend (respawn_at_friend)"); TpReq = true end
+    end
     if TpReq then local w = TpReq; TpReq = false; if have then pcall(teleport_to_friend, w) end end
+    if Game.status_req then Game.status_req = false; pcall(Ping.status) end
+    if Game.chat_req then Game.chat_req = false; pcall(Ping.chat_press) end
+    if Ping.chat_pick and game_time > Ping.chat_at then pcall(Ping.chat_send) end
+    if Ping.req then Ping.req = false; if have then local ok, err = pcall(Ping.do_ping); if not ok then log("ping: %s", tostring(err)) end end end
+    if have then pcall(Ping.pings_tick) end
+    if Follow and have then local ok, err = pcall(follow_tick); if not ok then log("follow error: %s", tostring(err)); Follow = nil end end
     if Tp and have then local ok, err = pcall(tp_tick); if not ok then log("teleport error: %s", tostring(err)); Tp = nil end end
     for i, h in ipairs(Handlers.tick) do
         crumb("module tick " .. i)
@@ -2212,6 +2663,17 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
     local w = try(function() local wo = SafeUE.world(); return wo and tostring(wo:GetAddress()) end)
     if w and Game.world_addr and w ~= Game.world_addr then world_unloading() end
     if w then Game.world_addr = w end
+    -- optional (config respawn_at_friend=true, launcher switch): after dying, go to a friend once respawned
+    if Game.dead then Game.deaths = (Game.deaths or 0) + 1 end
+    -- launcher "Limit to 60 fps" (config fps60=true)
+    if Config.fps60 == true or Config.fps60 == "true" then
+        pcall(function()
+            local pc = SafeUE.player_controller()
+            local ks = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+            if pc and ks then ks:ExecuteConsoleCommand(pc:GetWorld(), "t.MaxFPS 60", pc) end
+        end)
+    end
+    if Game.dead and (Config.respawn_at_friend == true or Config.respawn_at_friend == "true") then Game.respawn_tp_at = game_time + 4 end
     Game.dead = false
     if Game.loading then log("level loaded: resuming") end
     Game.loading = false
@@ -2341,6 +2803,39 @@ end)
 RegisterConsoleCommandHandler("coop_ghost_off", function(_, _, out) stop_ghosts(); reply(out, "ghosts removed"); return true end)
 RegisterConsoleCommandHandler("coop_off", function(_, _, out)
     restart_net(); Config.mode = "off"; save_config(); reply(out, "co-op off"); return true
+end)
+
+------------------------------------------------------------------------ version check
+-- Everyone in a room needs the same mod version (events/state lines change between versions). Each player
+-- tells every newcomer its version; a different one - or none within 15 s (before 1.4.8) - gets a message.
+local VerCheck = {}          -- id -> { at = join time, got = version }
+local function ver_popup(msg)
+    log("%s", msg)
+    local P2 = _G.PoppyCoop
+    if P2 and P2.popup then pcall(P2.popup, msg) end
+end
+table.insert(Handlers.join, function(id, name)
+    Coop.send_to(id, "ver", VERSION)
+    VerCheck[id] = { at = game_time, name = name }
+end)
+table.insert(Handlers.leave, function(id) VerCheck[id] = nil end)
+Coop.on("ver", function(from, v)
+    v = tostring(v or ""):match("^[%w%.]+") or "?"
+    local c = VerCheck[from] or {}
+    c.got = v
+    VerCheck[from] = c
+    if v ~= VERSION then
+        local pl = Net.players[from]
+        ver_popup(("%s has mod v%s, you have v%s - update so both use the same launcher version!"):format(pl and pl.name or "A player", v, VERSION))
+    end
+end)
+table.insert(Handlers.tick, function()
+    for id, c in pairs(VerCheck) do
+        if not c.got and not c.told and game_time - (c.at or game_time) > 15 and id ~= BUDDY_ID and id ~= PLAY_ID then
+            c.told = true
+            ver_popup(("%s has an older mod version (before 1.4.8) - update so both use the same launcher version!"):format(c.name or "A player"))
+        end
+    end
 end)
 
 ------------------------------------------------------------------------ init

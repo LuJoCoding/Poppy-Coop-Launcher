@@ -13,6 +13,7 @@
 #include <winhttp.h>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <cwctype>
 #include <random>
 #include <cmath>
@@ -170,6 +171,9 @@ static std::vector<KeyBind> default_keys() {
         { L"buddy", L"Show / hide buddy figure", L"F7", L"" },
         { L"record", L"Record your movement", L"O", L"" },
         { L"play", L"Replay recorded movement", L"P", L"" },
+        { L"ping", L"Ping a spot for everyone", L"T", L"" },
+        { L"status", L"Show fps / ping / players", L"F10", L"" },
+        { L"chat", L"Quick chat (press again: next)", L"Y", L"" },
     };
 }
 // chapters: bit 1 = Chapter 1, bit 2 = Chapter 2
@@ -180,8 +184,12 @@ static std::vector<SyncOpt> default_sync() {
         { L"sync_inventory", L"Shared inventory", L"One team inventory for keys & items", 3, true },
         { L"sync_hands", L"Shared GrabPack hands", L"A new hand goes to everyone", 3, true },
         { L"sync_physics", L"Pullable objects", L"Boxes, barrels, chairs move for all", 3, true },
-        { L"sync_levels", L"Keep friends' areas loaded", L"So teleporting lands on a floor", 3, true },
+        { L"bg_levels", L"Keep friends' areas loaded", L"Off = safer: their rooms' enemies can't reach you", 3, false },
         { L"sync_minigames", L"Minigames", L"Musical Memory, Whack-a-Wuggy", 2, true },
+        { L"auto_follow", L"Follow out of chases", L"Friend escaped a chase you're in: go to them", 2, true },
+        { L"respawn_at_friend", L"Respawn at a friend", L"After dying you are teleported to a friend", 3, false },
+        { L"boost", L"Stand on friends", L"Jump on a friend's head to reach higher spots", 2, true },
+        { L"fps60", L"Limit to 60 fps", L"Smoother on weaker PCs, less heat", 3, false },
         { L"popups", L"On-screen messages", L"Joined / died / teleport messages", 3, true },
     };
 }
@@ -511,6 +519,54 @@ struct Probe {
     std::wstring colo, note;             // Cloudflare datacenter / why it couldn't be measured
     bool done = false;
 };
+
+// ------------------------------------------------------------------ update check
+// newest release tag on GitHub ("v1.4.3" -> "1.4.3"); empty when offline / on any error
+#define RELEASES_HOST L"api.github.com"
+#define RELEASES_PATH L"/repos/LuJoCoding/Poppy-Coop-Launcher/releases/latest"
+#define RELEASES_PAGE L"https://github.com/LuJoCoding/Poppy-Coop-Launcher/releases/latest"
+static std::wstring latest_release() {
+    std::wstring tag;
+    HINTERNET s = WinHttpOpen(L"PoppyCoopLauncher/" LAUNCHER_VERSION, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
+    if (!s) return tag;
+    WinHttpSetTimeouts(s, 5000, 5000, 5000, 5000);
+    HINTERNET c = WinHttpConnect(s, RELEASES_HOST, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET q = c ? WinHttpOpenRequest(c, L"GET", RELEASES_PATH, nullptr, nullptr, nullptr, WINHTTP_FLAG_SECURE) : nullptr;
+    if (q && WinHttpSendRequest(q, L"Accept: application/vnd.github+json\r\n", (DWORD)-1L, nullptr, 0, 0, 0) && WinHttpReceiveResponse(q, nullptr)) {
+        std::string body;
+        char buf[4096];
+        DWORD n = 0;
+        while (body.size() < 256 * 1024 && WinHttpReadData(q, buf, sizeof buf, &n) && n > 0) body.append(buf, n);
+        size_t k = body.find("\"tag_name\"");
+        if (k != std::string::npos) {
+            size_t a = body.find('"', body.find(':', k) + 1);
+            size_t b = a == std::string::npos ? a : body.find('"', a + 1);
+            if (a != std::string::npos && b != std::string::npos && b - a < 32) {
+                std::string t = body.substr(a + 1, b - a - 1);
+                if (!t.empty() && (t[0] == 'v' || t[0] == 'V')) t.erase(0, 1);
+                bool okchars = !t.empty();
+                for (char ch : t) if (!((ch >= '0' && ch <= '9') || ch == '.')) okchars = false;
+                if (okchars) tag.assign(t.begin(), t.end());
+            }
+        }
+    }
+    if (q) WinHttpCloseHandle(q);
+    if (c) WinHttpCloseHandle(c);
+    WinHttpCloseHandle(s);
+    return tag;
+}
+// "1.4.10" > "1.4.9"
+static bool version_newer(const std::wstring& a, const std::wstring& b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() || j < b.size()) {
+        long x = 0, y = 0;
+        while (i < a.size() && a[i] != L'.') x = x * 10 + (a[i++] - L'0');
+        while (j < b.size() && b[j] != L'.') y = y * 10 + (b[j++] - L'0');
+        if (x != y) return x > y;
+        i++; j++;
+    }
+    return false;
+}
 
 static Probe probe_relay(const std::wstring& url) {
     Probe r;

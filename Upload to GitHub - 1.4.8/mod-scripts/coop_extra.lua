@@ -238,29 +238,35 @@ local function resolve_prop(path)
 end
 local function motion_scan_step()
     if P.CHAPTER ~= 2 or not ENABLE_PHYSICS then return end
-    local t = now()
-    if not Motion.cand and t - (Motion.cand_at or -100) > 60 then
-        Motion.cand_at = t
-        Motion.cand = try(function() return FindAllOf("StaticMeshActor") end) or {}
-        Motion.cursor = 1
-        Motion.dbg = Motion.dbg or {}
-        Motion.dbg.fetch_n, Motion.dbg.fetch_at = #Motion.cand, t
-    end
-    local list = Motion.cand
-    if not list then return end
-    local stop = math.min(#list, Motion.cursor + 149)
-    for i = Motion.cursor, stop do
-        local a = list[i]
+    -- the census's plain StaticMeshActors, checked in the frame the census finished (an actor list must not
+    -- be kept across frames: a garbage collection frees actors). Each actor is checked once (by address):
+    -- the full ~5000 after a map load (hidden by loading), later only the few hundred of a new area.
+    local C = P.Census
+    if not (C and C.fresh) or Motion.smgen == C.gen then return end
+    Motion.smgen = C.gen
+    -- every 5 minutes everything is checked again (a prop can start simulating later)
+    if not Motion.smchk or now() - (Motion.smchk_at or -1000) > 300 then Motion.smchk, Motion.smchk_at = {}, now() end
+    local chk, now_chk, n = Motion.smchk, {}, 0
+    for _, a in ipairs((C.by or {}).StaticMeshActor or {}) do
         pcall(function()
-            if a:IsValid() and a:K2_GetRootComponent().BodyInstance.bSimulatePhysics == true then
-                local path = fullpath(a)
-                if path and path:find(":PersistentLevel.", 1, true) then track_prop(a, path, "phys") end
+            local ad = a:GetAddress()
+            local r = chk[ad]
+            if r == nil then
+                n = n + 1
+                r = a:K2_GetRootComponent().BodyInstance.bSimulatePhysics == true
+                if r then
+                    local path = fullpath(a)
+                    if path and path:find(":PersistentLevel.", 1, true) then track_prop(a, path, "phys") end
+                end
             end
+            now_chk[ad] = r
         end)
     end
-    Motion.cursor = stop + 1
-    if Motion.cursor > #list then Motion.cand = nil end   -- done: drop the list (its objects may be freed later)
+    Motion.smchk = now_chk
+    Motion.dbg = Motion.dbg or {}
+    Motion.dbg.fetch_n, Motion.dbg.fetch_at = n, now()
 end
+local census   -- one pass over all actors, by class (defined after POSE_CLASSES)
 local function scan_motion()
     Motion.scan_at = now()
     local seen = {}
@@ -272,13 +278,17 @@ local function scan_motion()
     end
     if ENABLE_PHYSICS then
         -- Chapter 1's movable props (also the ones only pushed, without a grab component)
+        local by = census()
         for _, cls in ipairs(P.CHAPTER == 1 and PHYS_CLASSES_CH1 or PHYS_CLASSES_CH2) do
-            for _, a in ipairs(try(function() return FindAllOf(cls) end) or {}) do
+            for _, a in ipairs(by[cls] or {}) do
                 if valid(a) and (simulating(try(function() return a:K2_GetRootComponent() end)) or held(a)) then add(a, "phys") end
             end
         end
-        -- props the GrabPack can grab/pull and that are simulated by physics
-        for _, c in ipairs(try(function() return FindAllOf("GrabpackGrabComponent") end) or {}) do
+        -- props the GrabPack can grab/pull and that are simulated by physics (Chapter 1's grab component;
+        -- Chapter 2 has none - FindAllOf of a missing class still walks every object)
+        -- (checked 1.4.8: all 92 grab components of Chapter 1 belong to PHYS_CLASSES_CH1 - this FindAllOf (6-10 ms)
+        -- found nothing new; kept as a debug option: config grab_scan=true)
+        for _, c in ipairs(P.CHAPTER == 1 and (Cfg.grab_scan == true or Cfg.grab_scan == "true") and try(function() return FindAllOf("GrabpackGrabComponent") end) or {}) do
             local a = valid(c) and try(function() return c:GetOwner() end)
             if valid(a) then
                 local sim = simulating(a.RootComponent)
@@ -377,9 +387,14 @@ local motion_apply           -- defined below (runs from the late queue in Chapt
 local function motion_tick(dt)
     if Motion.off or not Coop.active() then return end
     if not ENABLE_PHYSICS and not ENABLE_HUGGY then return end
-    if now() - Motion.scan_at > (P.CHAPTER == 2 and 30 or 4) then
+    if P.Census.fresh and Motion.gen ~= P.Census.gen then          -- a new census (levels changed / every 30-60 s)
+        Motion.gen = P.Census.gen
+        local c0 = os.clock()
         local ok, err = pcall(scan_motion)
         if not ok then mfail("scan", err) end
+        local S = P.Perf and P.Perf.sec
+        if S then S.x_mscan = (S.x_mscan or 0) + os.clock() - c0 end
+        if os.clock() - c0 > 0.005 then log("slow: motion scan %.1f ms (%d tracked)", (os.clock() - c0) * 1000, (function() local n = 0 for _ in pairs(Motion.tracked) do n = n + 1 end return n end)()) end
     end
     local ok0, err0 = pcall(motion_scan_step)
     if not ok0 then mfail("scan step", err0) end
@@ -637,16 +652,97 @@ local function alive(e)
     local exists = a ~= nil and a:IsValid()
     local ok = exists and addr(a) == e.aaddr
     -- the level came back (new object at the same path): rescan soon so its final pose is re-applied
-    if exists and not ok then Pose.scan_at = math.min(Pose.scan_at, t - 28) end
+    if exists and not ok then P.Census.want = true end
     Pose.alive_cache[e.apath] = { t = t, ok = ok }
     return ok
 end
 
+-- Every FindAllOf("SomeClass") walks the engine's whole object list (~10-30 ms), even for a class that
+-- doesn't exist in this chapter. Scanning ~50 prop/part classes that way froze the game for 200-300 ms every
+-- few seconds. One FindAllOf("Actor") plus each actor's class name costs ~15 ms (Chapter 1) and finds them all.
+-- Subclasses are matched through the class's parents (looked up once per class name and remembered).
+local CENSUS_WANT = {}
+for k in pairs(POSE_CLASSES) do CENSUS_WANT[k] = true end
+for _, k in ipairs(PHYS_CLASSES_CH1) do CENSUS_WANT[k] = true end
+for _, k in ipairs(PHYS_CLASSES_CH2) do CENSUS_WANT[k] = true end
+if P.CHAPTER == 2 then CENSUS_WANT.StaticMeshActor = true end   -- physics props without a class of their own
+local CensusKind = {}   -- class name -> wanted class it counts as, or false
+-- The census runs when the set of loaded levels changes (new areas = new props/parts/classes) and otherwise
+-- only every 30 s (Chapter 1) / 60 s (Chapter 2), always within ONE frame: the actor list must not be kept
+-- across frames (a garbage collection in between frees actors, touching them crashes UE4SS). Each actor's
+-- class is remembered by its address, so a census is FindAllOf("Actor") (~12-16 ms) plus a table lookup per
+-- actor; only actors not seen before have their class read (the expensive part, ~5 us each).
+local CENSUS_EVERY = 60
+local CENSUS_MIN_GAP = 5                -- streaming comes in bursts: at most one census per 5 s
+local Census = { by = {}, classes = {}, gen = 0, at = -100, levels = -1, lv_at = -100, want = true }
+P.Census = Census
+P.CensusDone = P.CensusDone or {}       -- functions(classes) run when a census finished (coop_world hooks classes)
+local CensusAddr = {}                    -- actor address -> class name (cleared on map change)
+local function census_kind(cls)
+    local sc = cls
+    for _ = 1, 12 do
+        if not (sc and sc:IsValid()) then break end
+        local n = sc:GetFName():ToString()
+        if CENSUS_WANT[n] then return n end
+        if n == "Actor" or n == "Object" then break end
+        sc = sc:GetSuperStruct()
+    end
+    return false
+end
+local function census_levels()
+    local f = P.level_count
+    return f and f() or -1
+end
+local function census_step()
+    Census.fresh = false                 -- the last census's actor lists are only usable in the frame it ran
+    local t = now()
+    if t - Census.lv_at > 1 then
+        Census.lv_at = t
+        local n = census_levels()
+        if n ~= Census.levels then Census.levels, Census.want = n, true end
+    end
+    if not ((Census.want and t - Census.at > CENSUS_MIN_GAP) or t - Census.at > CENSUS_EVERY) then return end
+    Census.want, Census.at = false, t
+    local list = try(function() return FindAllOf("Actor") end) or {}
+    local by, classes, seen_now = {}, {}, {}
+    for i = 1, #list do
+        local a = list[i]
+        pcall(function()
+            local ad = a:GetAddress()
+            local cn = CensusAddr[ad]
+            if not cn then
+                local cls = a:GetClass()
+                cn = cls:GetFName():ToString()
+                CensusAddr[ad] = cn
+                if CensusKind[cn] == nil then CensusKind[cn] = census_kind(cls) end
+            end
+            seen_now[ad] = cn
+            if not classes[cn] then classes[cn] = { cls = a:GetClass(), a = a } end   -- fresh: a level reload makes a new class
+            local w = CensusKind[cn]
+            if w then
+                local l = by[w]
+                if not l then l = {}; by[w] = l end
+                l[#l + 1] = a
+            end
+        end)
+    end
+    CensusAddr = seen_now                -- forget actors that are gone (their address may be reused)
+    Census.by, Census.classes, Census.gen, Census.at, Census.fresh = by, classes, Census.gen + 1, now(), true
+    for _, f in ipairs(P.CensusDone) do pcall(f, classes) end
+end
+P.census_step = census_step
+census = function() return Census.by end
+table.insert(Handlers.unload, function()
+    Census.by, Census.classes, Census.want, Census.levels = {}, {}, true, -1
+    CensusAddr = {}
+end)
+
 local function pose_scan()
     Pose.scan_at = now()
     local parts, byKey = {}, {}
+    local by = census()
     for cls, spec in pairs(POSE_CLASSES) do
-        for _, a in ipairs(FindAllOf(cls) or {}) do
+        for _, a in ipairs(by[cls] or {}) do
             local path = valid(a) and fullpath(a)
             if level_placed(path) then
                 local comps = {}
@@ -701,9 +797,14 @@ end
 local function pose_tick(dt)
     if Pose.off or not Coop.active() then return end
     local t = now()
-    if t - Pose.scan_at > 30 then        -- (a level load resets scan_at, so new areas are scanned at once)
+    if P.Census.fresh and Pose.gen ~= P.Census.gen then       -- new census: levels changed (new areas) or every 30-60 s
+        Pose.gen = P.Census.gen
+        local c0 = os.clock()
         local ok, err = pcall(pose_scan)
         if not ok then pfail("scan", err) end
+        local S = P.Perf and P.Perf.sec
+        if S then S.x_pscan = (S.x_pscan or 0) + os.clock() - c0 end
+        if os.clock() - c0 > 0.005 then log("slow: pose scan %.1f ms (%d parts)", (os.clock() - c0) * 1000, #Pose.parts) end
     end
     -- remote targets: ease towards them every frame
     for _, e in ipairs(Pose.parts) do
@@ -781,6 +882,7 @@ table.insert(Handlers.unload, function() Pose.parts, Pose.byKey, Pose.scan_at, P
 -- animation asset and its position are synced (live while it plays, and the final position).
 local ANIM_SYNC = { TwoWayBridge_BP_C = { "SkeletalMesh_Bridge" }, MachineBridgeOneWay_BP_C = { "SkeletalMesh" } }
 local Anim = { parts = {}, byKey = {}, final = {}, scan_at = -100, read_at = 0 }
+for k in pairs(ANIM_SYNC) do CENSUS_WANT[k] = true end
 P.Anim = Anim      -- diagnostics
 local function anim_read(c)
     local si = c.AnimScriptInstance
@@ -792,7 +894,7 @@ local function anim_scan()
     Anim.scan_at = now()
     local parts, byKey = {}, {}
     for cls, props in pairs(ANIM_SYNC) do
-        for _, a in ipairs(FindAllOf(cls) or {}) do
+        for _, a in ipairs(census()[cls] or {}) do
             local path = valid(a) and fullpath(a)
             if level_placed(path) then
                 for _, prop in ipairs(props) do
@@ -830,7 +932,8 @@ end
 local function anim_tick()
     if Pose.off or not Coop.active() then return end
     local t = now()
-    if t - Anim.scan_at > 30 then
+    if P.Census.fresh and Anim.gen ~= P.Census.gen then
+        Anim.gen = P.Census.gen
         local ok, err = pcall(anim_scan)
         if not ok then pfail("anim scan", err) end
     end
@@ -903,6 +1006,7 @@ local MINIGAMES = {
     { cls = "Whack-A-Mole_Controller_C", wonVar = "Won Game", share = { "Add Hit" } },               -- Whack-a-Wuggy
 }
 P.MINIGAMES = MINIGAMES
+for _, g in ipairs(MINIGAMES) do CENSUS_WANT[g.cls] = true end
 local MG = { hooked = {}, applying = false, scan_at = -100, sent = 0, applied = 0 }
 P.MG = MG
 local function mg_send(i, kind, obj)
@@ -930,15 +1034,21 @@ end
 -- Hooks are registered once per function. One registered right after a load can fail ("UFunction::Func:
 -- 0x0", not linked yet): only a hook that really worked is marked done, the others are retried in 5 s.
 local ENABLE_MINIGAMES = Cfg.sync_minigames ~= false and Cfg.sync_minigames ~= "false"   -- launcher setting
-local function mg_hook()
+local function mg_hook(from_census)
     if P.CHAPTER ~= 2 or not ENABLE_MINIGAMES then return end
+    MG.retry_at = nil
     MG.scan_at = now()
     MG.ok = MG.ok or {}
     for i, g in ipairs(MINIGAMES) do
         if not MG.hooked[g.cls] then
-            local a = try(function() return FindFirstOf(g.cls) end)
-            local cls = valid(a) and try(function() return a:GetClass() end)
-            local cp = cls and fullpath(cls)
+            MG.cp = MG.cp or {}
+            local cp = MG.cp[g.cls]
+            if not cp and from_census then
+                local a = (census()[g.cls] or {})[1]
+                local cls = valid(a) and try(function() return a:GetClass() end)
+                cp = cls and fullpath(cls)
+                MG.cp[g.cls] = cp
+            end
             if cp then
                 local all = true
                 local wanted = {}
@@ -951,7 +1061,7 @@ local function mg_hook()
                         if ok then MG.ok[key] = true else all = false end
                     end
                 end
-                if all then MG.hooked[g.cls] = true end
+                if all then MG.hooked[g.cls] = true else MG.retry_at = now() + 5 end
                 log("minigame sync for %s: %s", g.cls, all and "on" or "retrying")
             end
         end
@@ -1009,11 +1119,20 @@ end
 table.insert(Handlers.tick, function(dt, have)
     if not have then return end
     local crumb = P.crumb or function() end
+    crumb("extra: census")
+    local cc = os.clock()
+    pcall(census_step)
+    if os.clock() - cc > 0.008 then log("slow: census step %.1f ms", (os.clock() - cc) * 1000) end
     crumb("extra: popups"); popups_tick()
     crumb("extra: alone"); pcall(alone_tick)
+    local c0 = os.clock()
     crumb("extra: motion"); motion_tick(dt)
+    local c1 = os.clock()
     crumb("extra: pose"); pose_tick(dt)
-    if P.CHAPTER == 2 and now() - MG.scan_at > 5 then crumb("extra: minigames"); pcall(mg_hook) end
+    local S = P.Perf and P.Perf.sec
+    if S then S.x_motion = (S.x_motion or 0) + c1 - c0; S.x_pose = (S.x_pose or 0) + os.clock() - c1 end
+    if P.CHAPTER == 2 and P.Census.fresh and MG.gen ~= P.Census.gen then MG.gen = P.Census.gen; crumb("extra: minigames"); pcall(mg_hook, true)
+    elseif MG.retry_at and now() > MG.retry_at then pcall(mg_hook, false) end
     crumb("extra: done")
     -- bridges are skeletal meshes animated in parallel worker tasks: reading/setting their animation
     -- inside the player's tick waited on those tasks and froze the game (seen in a debugger). Run it at
@@ -1026,7 +1145,7 @@ table.insert(Handlers.unload, function()
     Motion.tracked, Motion.scan_at = {}, -100
     -- the candidate list holds objects of the old world; the next list is fetched 10 s after the load
     -- (right after it only a handful of actors exist yet)
-    Motion.cand, Motion.cand_at = nil, now() - 50
+    Motion.smchk = {}
 end)
 -- the class dump (debug) used to run automatically and froze/crashed big levels; now only on request
 RegisterConsoleCommandHandler("coop_dump", function(_, _, out)

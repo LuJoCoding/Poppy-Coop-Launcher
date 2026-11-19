@@ -1,4 +1,4 @@
-POPPY PLAYTIME CO-OP - LAUNCHER 1.4.0 (Chapter 1 + 2)
+POPPY PLAYTIME CO-OP - LAUNCHER 1.4.8 (Chapter 1 + 2)
 =====================================================
 
 Inoffizieller PoppyCoop-Launcher 3.0 (Fan-Mod, nicht von Mob Entertainment).
@@ -42,7 +42,10 @@ Neu gegenüber dem Original:
 - Strom, Schalter, Schlüssel, Gegenstände und Checkpoints werden geteilt
   ("Load Game" bringt jeden zum weitesten Checkpoint).
 - Für 2, 3 oder mehr Spieler: alle treten demselben Raum bei.
-- F6: zu einem Mitspieler teleportieren (bei mehreren springt jeder Druck zum nächsten).
+- F6: zu einem Mitspieler teleportieren (bei mehreren springt jeder Druck zum nächsten). Chapter 2: ist
+  der Mitspieler schon an einem späteren Checkpoint, lädt man zuerst seinen Checkpoint (kurzer
+  Ladebildschirm) - Verfolgungen/Spiele, die er schon geschafft hat, sind dann auch bei einem vorbei.
+  Schafft ein Freund eine Verfolgung, in der man selbst noch steckt, wird man automatisch zu ihm geholt.
   Sein Bereich wird vorher geladen ("Loading ...'s area"), man fällt nicht mehr aus der Map.
   Tasten änderbar im Launcher (Chapter -> "Settings"; F8/F9 bleiben frei für andere Mods).
 - Absturz beim Neuladen eines Checkpoints behoben.
@@ -57,7 +60,7 @@ Installation (Windows)
    (meist findet er ihn selbst, sonst "Browse": Steam -> Rechtsklick auf das Spiel -> Verwalten ->
    Lokale Dateien durchsuchen), Name und Farbe -> "Install co-op mod".
 3. Wer eine ältere Version schon benutzt hat: einfach diesen Launcher starten und PLAY drücken,
-   der Mod wird automatisch auf 1.4.0 aktualisiert. Über PLAY muss dann "Co-op mod v1.4.0 installed"
+   der Mod wird automatisch auf 1.4.8 aktualisiert. Über PLAY muss dann "Co-op mod v1.4.8 installed"
    stehen. Sonst in "Settings" einmal "Reinstall" klicken.
 4. Tasten und was geteilt wird: "Settings" oben rechts im Chapter. Alle im Raum sollten dieselben
    Schalter benutzen.
@@ -66,9 +69,9 @@ Zusammen spielen
 ----------------
 - Einer drückt "Create Game" und schickt den Raumcode, alle anderen "Join Game" und geben ihn ein.
 - Alle laden im Spiel DENSELBEN Checkpoint (Play -> Load Game).
-- Alle brauchen diese Launcher-Version (1.4.0), sonst passen die Mods nicht zusammen.
+- Alle brauchen diese Launcher-Version (1.4.8), sonst passen die Mods nicht zusammen.
 - Firewall-Frage zu PoppyCoopNet.exe: "Zulassen".
-- F6 = zu einem Mitspieler teleportieren (reihum), F7 = Begleitfigur, O/P = Bewegung aufnehmen/abspielen.
+- F6 = zu einem Mitspieler teleportieren (reihum), T = Stelle markieren (Ping), F10 = Status (fps, Ping, wo deine Freunde sind), Y = Schnell-Chat, F7 = Begleitfigur, O/P = Bewegung aufnehmen/abspielen.
 - Checkpoints gehen nur vorwärts: wer hinterher ist, setzt die anderen nicht zurück.
 - Den Raumcode nur an Leute geben, mit denen ihr spielen wollt.
 - Im Spiel F10 und "coop_status" eintippen zeigt Raum und Mitspieler.
