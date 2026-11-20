@@ -1,14 +1,14 @@
 # Poppy Playtime Co-op (PoppyCoop)
 
-An unofficial online co-op mod for **Poppy Playtime Chapter 1** and **Chapter 2 (beta)** on PC (Steam).
+An unofficial online co-op mod for **Poppy Playtime Chapter 1** and **Chapter 2 (beta)** on PC (Steam) - and, as an experiment, **Chapters 3-5**.
 It's free to play, with no account needed. You just need the launcher.
 
 > Fan-made. Not affiliated with or endorsed by Mob Entertainment.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.4.8.zip`](Upload%20to%20GitHub%20-%201.4.8/PoppyCoop_Launcher_1.4.8.zip)**
-(folder `Upload to GitHub - 1.4.8`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.5.5.zip`](Upload%20to%20GitHub%20-%201.5.5/PoppyCoop_Launcher_1.5.5.zip)**
+(folder `Upload to GitHub - 1.5.5`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -39,7 +39,15 @@ automatically when you press PLAY.
   bars, ping, jitter and packet loss. Everyone you play with has to pick the same server.
   Hosting needs UDP port 27777 forwarded in your router and a real public IPv4 address (not DS-Lite).
 - **Launcher settings** (bottom left): language (English / Deutsch), theme (Dark / Midnight / Light), accent colour,
-  animations on/off. The launcher tells you when a new version is out.
+  animations on/off. The launcher tells you when a new version is out and can update itself.
+- **Experimental chapters** (launcher settings): Chapters 3, 4 and 5 can be tried. You see each other and can
+  teleport, ping and chat, but doors, puzzles and items are not shared yet (chapter switch "Try world sync"
+  turns it on at your own risk), and the game may crash.
+- **Several games at once** (launcher settings): for Nucleus Co-op / split screen. With a game running, PLAY
+  becomes PLAY ANOTHER and starts another window with its own name and colour in the same room.
+  Command line for Nucleus handlers / scripts:
+  `PoppyCoopLauncher.exe --play --chapter N [--name X] [--color C] [--room CODE] [--dir "game folder"] [--multi]`
+  (errors are written to `%APPDATA%\PoppyCoop\cli_last_error.txt`).
 
 ### Keys (default)
 
@@ -49,10 +57,10 @@ automatically when you press PLAY.
 | **F7** | Buddy figure that follows you (solo testing / clips) |
 | **O / P** | Record your movement / replay it as a second player (trailer clips) |
 | **T** | Ping: marks the spot you look at for everyone |
-| **Y** | Quick chat: each press picks the next phrase, it is sent a moment later |
-| **F10** | Status: version, fps, ping, play time, deaths and where your friends are. (`coop_status` in the console still works.) |
+| **Y** | Chat menu: 1-8 quick messages, or type a message + Enter (Esc closes). `/help` lists the chat commands (`/tp`, `/stats`, `/report`, `/solid`, `/spectate`, ...) |
+| **F11** | Status panel: version, fps, ping, play time, deaths, split times and where your friends are. (F10 is the UE4SS console; `coop_status` there still works.) |
 
-Change them in the launcher (chapter settings). F8 and F9 are intentionally left free for other mods.
+Change them in the launcher (chapter settings) - they apply to every chapter. F8 and F9 are intentionally left free for other mods, F10 opens the console.
 
 ## What's shared
 
@@ -80,7 +88,7 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 
 ## Troubleshooting
 
-- **Can't see anyone:** press F10 (status shows the players), or type `coop_status` in the F10 console.
+- **Can't see anyone:** press F11 (status shows the players), or type `coop_status` in the F10 console.
   - `helper=down`: `PoppyCoopNet.exe` is blocked or was removed by an antivirus. Restore it, allow it, and press PLAY again.
   - Different room: check that the code matches exactly. Copy and paste it instead of typing it.
   - Different chapter or server: everyone must pick the same chapter and the same server in the launcher.
@@ -104,6 +112,22 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.5.5
+Merge of 1.5.0 (Chapters 3-5, Nucleus Co-op) with the new chat and message UI.
+- **Experimental Chapters 3-5** and **several games at once** (Nucleus Co-op / split screen) - see Settings above.
+- **Messages in boxes** at the left edge instead of the yellow text at the top; **status panel** at the top right (F11)
+  with deaths per player and checkpoint split times.
+- **Chat menu (Y):** 1-8 quick messages or type your own text; chat commands (`/help`). Friends nod or cheer on
+  quick messages.
+- **Friends are solid** from every side (you can stand on their head), their flying red hand is no longer mirrored.
+- Chapter 2: **shoot your hand at a friend** to pull yourself to them.
+- **Spectator camera:** after dying you watch a friend until you respawn.
+- Friends see when you **watch a cutscene**; a tape in the VHS recorder plays for everyone standing there.
+- New switches: **Performance mode**, **Harder enemies**, **Shared monsters (experimental)**.
+- Keys apply to every chapter; status moved from F10 to **F11** (F10 is the console).
+- Launcher: updates itself, figure preview, "Played with" names, problem report zip on the desktop,
+  `--play` command line.
 
 ### 1.4.8
 - **One game for everyone:** levers, switches and the Game Station lights now work for everyone (the level's own

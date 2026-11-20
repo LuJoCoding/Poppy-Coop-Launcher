@@ -1,0 +1,84 @@
+POPPY PLAYTIME CO-OP - LAUNCHER 1.5.5 (Chapter 1 + 2, Chapter 3-5 experimental)
+=====================================================
+
+Inoffizieller PoppyCoop-Launcher 3.0 (Fan-Mod, nicht von Mob Entertainment).
+Neu gegenüber dem Original:
+- Neuer Launcher: man muss Chapter 1 nicht mehr einrichten, um Chapter 2 zu spielen - das Setup
+  (Spielordner, Mod installieren) kommt erst, wenn man ein Chapter anklickt.
+- Einstellungen pro Chapter (Knopf "Settings"): Tasten (Teleport, Begleitfigur, Aufnehmen, Abspielen)
+  einfach anklicken und neue Taste drücken; Schalter, was geteilt wird (Türen/Rätsel, Gegenstände,
+  Inventar, Hände, ziehbare Objekte, geladene Bereiche, Minispiele, Meldungen); Mod neu installieren,
+  entfernen, Ordner ändern.
+- Der Launcher findet das Spiel selbst - auch eine über die Steam-Konsole gedownpatchte Version (die landet
+  immer in Steam\steamapps\content\app_...\depot_...). Findet er nichts, sagt er das und man wählt den Ordner.
+- "Launcher settings" (unten links): Design (Dark / Midnight / Light), Akzentfarbe, Animationen.
+- Server-Karte (unten links): Server auswählen und sehen, wie gut die Verbindung ist (Signalbalken, Ping,
+  Schwankung, Verlust). Neben dem kostenlosen PoppyCoop-Relay kann man selbst hosten oder die IP eines
+  Freundes / ein anderes Relay eintragen. Alle, die zusammen spielen, müssen denselben Server wählen.
+- Eine EXE für Windows und Linux (Steam/Proton). Name, Farbe, Codes und Spielordner aus dem alten
+  Launcher werden übernommen.
+- Chapter 2 ist im Launcher spielbar (Beta).
+- Echte Spielerfiguren in Chapter 2: Ganzkörperfigur mit GrabPack (Rucksack, Werfer, Hände),
+  Animationen für Stehen, Gehen, Rennen, Ducken, Springen; abgeschossene Hände fliegen mit
+  schwarzem Kabel dorthin, wo der Mitspieler hinschießt; grüne Hand ist an der Figur grün.
+- Neue Spielerfigur in Chapter 1: gesichtslose Puppe mit Kugelkopf in der Spielerfarbe, mit Gelenken
+  (Gehen, Rennen, Ducken, Springen, Liegen bei Tod) und dem echten GrabPack aus Chapter 1 (Rucksack,
+  beide Werfer, Hände auf dem Rohr). GrabPack und rote Hand erscheinen erst, wenn der Spieler sie hat.
+- Chapter 1: abgeschossene Hände sind die echten Spielhände - gleicher Winkel wie beim Mitspieler,
+  und hält er sich irgendwo fest, ist die Hand auch an der Figur geschlossen. Auch kurze Schüsse.
+- Chapter 1: Kisten, Spielzeugkisten, Bauklötze, Stühle, Tische, Mülleimer usw. werden beim Bewegen
+  geteilt und bleiben auch nach dem Neuladen dort liegen; die Zieh-Plattformen in der Fabrik bewegen
+  sich beim Mitspieler mit (man steht nicht mehr in der Luft).
+- Einfrieren des Spiels in Chapter 1 behoben.
+- Chapter 2: alles, was man mit dem GrabPack ziehen kann (Fässer, Eimer, Kisten, Tonnen, Leitern,
+  Bauklötze, Spielzeugkisten, Stühle ...), bewegt sich beim Mitspieler mit und bleibt dort liegen.
+- Chapter 2 Minispiele: Musical Memory - wer gewinnt, gewinnt für alle. Whack-a-Wuggy - zusammen
+  spielen: die Treffer aller Spieler zählen zusammen.
+- Chapter 2: duckt sich ein Spieler, schwebt seine Figur nicht mehr, sondern hockt am Boden.
+- Grüne Hand wird geteilt: Hat einer sie, bekommen alle sie.
+- Türen, Bodenluken, Hebel, Kran-Griffe, Lüftungsgitter, Spinnennetze, Holzwände, Pappfiguren,
+  Wagen usw. bewegen sich beim Mitspieler genau mit und bleiben nach dem Neuladen so.
+- Rätselteile (Ofentüren, Zahnräder, Formen, Farbkartuschen, Garagenhebel) werden geteilt.
+- Strom, Schalter, Schlüssel, Gegenstände und Checkpoints werden geteilt
+  ("Load Game" bringt jeden zum weitesten Checkpoint).
+- Für 2, 3 oder mehr Spieler: alle treten demselben Raum bei.
+- F6: zu einem Mitspieler teleportieren (bei mehreren springt jeder Druck zum nächsten). Chapter 2: ist
+  der Mitspieler schon an einem späteren Checkpoint, lädt man zuerst seinen Checkpoint (kurzer
+  Ladebildschirm) - Verfolgungen/Spiele, die er schon geschafft hat, sind dann auch bei einem vorbei.
+  Schafft ein Freund eine Verfolgung, in der man selbst noch steckt, wird man automatisch zu ihm geholt.
+  Sein Bereich wird vorher geladen ("Loading ...'s area"), man fällt nicht mehr aus der Map.
+  Tasten änderbar im Launcher (Chapter -> "Settings"; F8/F9 bleiben frei für andere Mods).
+- Absturz beim Neuladen eines Checkpoints behoben.
+- Launcher läuft deutlich flüssiger.
+
+Installation (Windows)
+----------------------
+1. ZIP entpacken, PoppyCoopLauncher.exe starten.
+   Windows meldet evtl. "Der Computer wurde durch Windows geschützt" (die EXE ist nicht signiert):
+   "Weitere Informationen" -> "Trotzdem ausführen".
+2. Das Chapter anklicken, das ihr spielen wollt. Erst dann fragt der Launcher nach dem Spielordner
+   (meist findet er ihn selbst, sonst "Browse": Steam -> Rechtsklick auf das Spiel -> Verwalten ->
+   Lokale Dateien durchsuchen), Name und Farbe -> "Install co-op mod".
+3. Wer eine ältere Version schon benutzt hat: einfach diesen Launcher starten und PLAY drücken,
+   der Mod wird automatisch auf 1.5.5 aktualisiert. Über PLAY muss dann "Co-op mod v1.5.5 installed"
+   stehen. Sonst in "Settings" einmal "Reinstall" klicken.
+4. Tasten und was geteilt wird: "Settings" oben rechts im Chapter. Alle im Raum sollten dieselben
+   Schalter benutzen.
+
+Zusammen spielen
+----------------
+- Einer drückt "Create Game" und schickt den Raumcode, alle anderen "Join Game" und geben ihn ein.
+- Alle laden im Spiel DENSELBEN Checkpoint (Play -> Load Game).
+- Alle brauchen diese Launcher-Version (1.5.5), sonst passen die Mods nicht zusammen.
+- Firewall-Frage zu PoppyCoopNet.exe: "Zulassen".
+- F6 = zu einem Mitspieler teleportieren (reihum), T = Stelle markieren (Ping), F11 = Status (fps, Ping, wo deine Freunde sind), Y = Chat-Menü (1-8 Schnellnachrichten oder tippen + Enter; Esc schließt; /help zeigt Chat-Befehle wie /tp, /stats, /solid), F7 = Begleitfigur, O/P = Bewegung aufnehmen/abspielen.
+- Kapitel 3-5 (experimentell): in den Launcher-Einstellungen "Experimentelle Kapitel" einschalten. Ihr seht euch und
+  könnt teleportieren, markieren und chatten, aber Türen, Rätsel und Gegenstände werden noch nicht geteilt, und das
+  Spiel kann abstürzen.
+- Mehrere Spiele auf einem PC (Nucleus Co-op / Splitscreen): in den Launcher-Einstellungen "Mehrere Spiele
+  gleichzeitig" einschalten; SPIELEN startet dann ein weiteres Fenster mit eigenem Namen und eigener Farbe.
+  Kommandozeile für Handler: PoppyCoopLauncher.exe --play --chapter N [--name X] [--color C] [--room CODE] [--dir "Spielordner"] [--multi]
+- Etwas kaputt? Kapitel-Einstellungen > "Spiel-Log zeigen" und das Log mit einer Beschreibung schicken.
+- Checkpoints gehen nur vorwärts: wer hinterher ist, setzt die anderen nicht zurück.
+- Den Raumcode nur an Leute geben, mit denen ihr spielen wollt.
+- Im Spiel F10 und "coop_status" eintippen zeigt Raum und Mitspieler.
