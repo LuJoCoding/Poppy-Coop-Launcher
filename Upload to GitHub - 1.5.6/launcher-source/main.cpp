@@ -8,7 +8,7 @@
 #include <cmath>
 
 // ------------------------------------------------------------------ messages from worker threads
-enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE, WM_APP_UPDATE, WM_APP_SELFUPD };
+enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE, WM_APP_UPDATE, WM_APP_SELFUPD, WM_APP_MINSIZE };
 static bool g_updating = false;
 static std::wstring g_latest;      // newest release on GitHub (empty: unknown / offline)
 // ------------------------------------------------------------------ language (English / Deutsch)
@@ -171,6 +171,10 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"BETA", L"BETA" },
         { L"SOON", L"BALD" },
         { L"LANGUAGE", L"SPRACHE" },
+        { L"Speedrun mode", L"Speedrun-Modus" },
+        { L"Speedrun mode on: only doors, inventory and hands are shared.", L"Speedrun-Modus an: nur Türen, Inventar und Hände werden geteilt." },
+        { L"Speedrun mode off: default settings.", L"Speedrun-Modus aus: Standard-Einstellungen." },
+        { L"Only what a run needs (doors, inventory, hands), max fps", L"Nur was ein Run braucht (Türen, Inventar, Hände), max. fps" },
         { L"Doors, switches & puzzles", L"Türen, Schalter & Rätsel" },
         { L"Doors, power, levers, puzzle parts", L"Türen, Strom, Hebel, Rätselteile" },
         { L"Picked-up items", L"Aufgehobene Gegenstände" },
@@ -267,7 +271,7 @@ static const wchar_t* WHATS_NEW_DE =
     L"- Freunde sehen, wenn du eine Cutscene schaust. Eine Kassette im VHS-Rekorder läuft für alle, die dort stehen.\n"
     L"- Neue Schalter: Leistungsmodus, Stärkere Gegner.\n"
     L"- Launcher: aktualisiert sich selbst, Figur-Vorschau, 'Gespielt mit'-Namen, Problem-Bericht als Zip auf dem Desktop.";
-enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4 };
+enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
 
 // ------------------------------------------------------------------ state
 enum class Page { Welcome, Chapter, Settings, Profile, App, Servers };
@@ -276,7 +280,8 @@ static HWND g_wnd;
 static Profile g_prof;
 static int g_sel = 0;                        // selected chapter index
 static Page g_page = Page::Chapter;
-static double g_s = 1.0;                     // DPI scale
+static double g_s = 1.0;                     // drawing scale = DPI scale * window zoom
+static double g_dpi = 1.0, g_zoom = 1.0;
 static std::wstring g_toast;
 static ULONGLONG g_toast_until = 0;
 static std::atomic<bool> g_installing{ false };
@@ -570,6 +575,24 @@ static void browse_folder(Chapter& c) {
     dlg->Release();
 }
 
+// "Speedrun mode" switched on: set the other switches to what a run needs (the mod forces the same values
+// while speedrun=true, so a friend's other switches can't slow it down); switched off: back to the defaults
+static void speedrun_preset(Chapter& c, int changed) {
+    if (std::wstring(c.sync[changed].id) != L"speedrun") return;
+    bool on = c.sync[changed].value;
+    static const wchar_t* ON_IDS[] = { L"sync_activations", L"sync_inventory", L"sync_hands", L"low_gfx" };
+    std::vector<SyncOpt> def = default_sync();
+    for (size_t i = 0; i < c.sync.size(); i++) {
+        if ((int)i == changed) continue;
+        if (!on) { c.sync[i].value = def[i].value; continue; }
+        bool v = false;
+        for (auto id : ON_IDS) if (std::wstring(c.sync[i].id) == id) v = true;
+        if (std::wstring(c.sync[i].id) == L"popups") v = true;    // joined / died messages stay
+        c.sync[i].value = v;
+    }
+    toast(on ? tr(L"Speedrun mode on: only doors, inventory and hands are shared.") : tr(L"Speedrun mode off: default settings."));
+}
+
 static void apply_settings(Chapter& c) {
     chapter_save_settings(c);
     if (!inst_ver(c).empty()) {
@@ -794,7 +817,9 @@ static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log) 
 
 // ------------------------------------------------------------------ chapter page parts
 static const int MX = 312;   // main area x
-static const int MW = 636;   // main area width
+static int MW = 636;         // main area width - grows with the window (set in paint)
+// window: layout space at 1x is at least 980x640; up to 1180x780 the layout gets more room, a bigger window zooms
+static const int MIN_W = 980, MIN_H = 640, BASE_W = 1180, BASE_H = 780;
 
 static void draw_colors(int x, int y) {
     for (int i = 0; i < 7; i++) {
@@ -1119,37 +1144,39 @@ static void draw_settings(int h) {
 
     // keys
     int y = 92;
-    RECT kc = R(MX, y, 300, 254);   // keys card: left column, 300 wide
+    const int KW = std::max(300, std::min(370, MW - 470));   // left column: 300 wide, more in a bigger window
+    const int BW = (KW - 44) / 2;                            // half-width button in it
+    RECT kc = R(MX, y, KW, 254);
     fill(kc, C_CARD, 14);
-    text(R(MX + 18, y + 14, 260, 18), tr(L"KEYS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, y + 14, KW - 40, 18), tr(L"KEYS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     const size_t nk = c.keys.size();               // up to 6 keys fit the card
     const int kstep = nk > 6 ? 25 : nk > 5 ? 29 : nk > 4 ? 35 : 44, kh = nk > 6 ? 23 : nk > 5 ? 26 : nk > 4 ? 30 : 34;
     for (int i = 0; i < (int)c.keys.size(); i++) {
         int ry = y + 40 + i * kstep;
-        text(R(MX + 18, ry, 170, kh), tr(c.keys[i].label), F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        text(R(MX + 18, ry, KW - 130, kh), tr(c.keys[i].label), F_SMALL, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         bool cap = g_capture == i;
         std::wstring lbl = cap ? L"press a key" : key_label(c.keys[i].value);
-        button(MX + 190, ry, 92, kh, lbl, cap ? Btn::Primary : Btn::Secondary, [i] { g_capture = g_capture == i ? -1 : i; g_focus = {}; });
+        button(MX + KW - 110, ry, 92, kh, lbl, cap ? Btn::Primary : Btn::Secondary, [i] { g_capture = g_capture == i ? -1 : i; g_focus = {}; });
     }
     button(MX + 18, y + 218, 150, 26, tr(L"Reset keys"), Btn::Ghost, [] {
         Chapter& ch = cur();
         for (auto& k : ch.keys) k.value = k.def;
         apply_keys_everywhere(ch); toast(tr(L"Keys reset to the defaults."));
     });
-    text(R(MX + 176, y + 214, 120, 34), tr(L"Click a key, then press the new one"), F_SMALL, C_DIM);
+    text(R(MX + 176, y + 214, KW - 180, 34), tr(L"Click a key, then press the new one"), F_SMALL, C_DIM);
 
     // sync options
-    const int SX = MX + 312, SW = MW - 312;
+    const int SX = MX + KW + 12, SW = MW - KW - 12;
     int nrows0 = 0;
     for (auto& o : c.sync) if (o.chapters & (1 << (c.num - 1))) nrows0++;
-    const int card_h = std::max(446, 40 + nrows0 * (nrows0 > 13 ? 29 : nrows0 > 11 ? 31 : nrows0 > 9 ? 36 : nrows0 > 8 ? 41 : 46) + 34);
+    // row height from the room the window has (bigger window = more air), 29..46
+    const int step = std::max(29, std::min(46, nrows0 ? (h - 44 - y - 74) / nrows0 : 46));
+    const int card_h = std::max(446, 40 + nrows0 * step + 34);
     RECT sc = R(SX, y, SW, card_h);
     fill(sc, C_CARD, 14);
     text(R(SX + 18, y + 14, SW - 36, 18), tr(L"SHARED WITH YOUR ROOM"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    int row = 0, nrows = 0;
-    for (auto& o : c.sync) if (o.chapters & (1 << (c.num - 1))) nrows++;
-    const int step = nrows > 13 ? 29 : nrows > 11 ? 31 : nrows > 9 ? 36 : nrows > 8 ? 41 : 46;   // many rows: tighter, and the card grows (below)
-    const int hint_dy = step < 30 ? 14 : step < 34 ? 15 : 18;
+    int row = 0;
+    const int hint_dy = step < 30 ? 14 : step < 34 ? 15 : 17;
     for (int i = 0; i < (int)c.sync.size(); i++) {
         SyncOpt& o = c.sync[i];
         if (!(o.chapters & (1 << (c.num - 1)))) continue;
@@ -1159,26 +1186,26 @@ static void draw_settings(int h) {
         text(R(SX + 18, ry, SW - 90, 18), tr(o.label), F_SMALL, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         text(R(SX + 18, ry + hint_dy, SW - 90, 16), tr(o.hint), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         draw_toggle(SX + SW - 58, ry + (step < 34 ? 5 : 8), o.value);
-        click(rr, [i] { Chapter& ch = cur(); ch.sync[i].value = !ch.sync[i].value; apply_settings(ch); });
+        click(rr, [i] { Chapter& ch = cur(); ch.sync[i].value = !ch.sync[i].value; speedrun_preset(ch, i); apply_settings(ch); });
         row++;
     }
     text(R(SX + 18, y + card_h - 26, SW - 36, 20), tr(L"Use the same settings as your friends."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
 
     // folder + mod
     int my = y + 266;
-    RECT mc = R(MX, my, 300, 214);
+    RECT mc = R(MX, my, KW, 214);
     fill(mc, C_CARD, 14);
-    text(R(MX + 18, my + 14, 260, 18), tr(L"CO-OP MOD"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, my + 14, KW - 40, 18), tr(L"CO-OP MOD"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     std::wstring iv = inst_ver(c);
-    text(R(MX + 18, my + 34, 270, 18), iv.empty() ? tr(L"Not installed") : L"v" + iv + (iv == MOD_VERSION ? tr(L" installed") : tr(L" (update ready)")), F_SMALL, iv.empty() ? C_WARN : C_TEXT, DT_LEFT | DT_SINGLELINE);
-    text(R(MX + 18, my + 54, 266, 18), c.dir, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+    text(R(MX + 18, my + 34, KW - 30, 18), iv.empty() ? tr(L"Not installed") : L"v" + iv + (iv == MOD_VERSION ? tr(L" installed") : tr(L" (update ready)")), F_SMALL, iv.empty() ? C_WARN : C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 18, my + 54, KW - 34, 18), c.dir, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
     my += 30;
     int idx = g_sel;
-    button(MX + 18, my + 60, 128, 30, tr(L"Reinstall"), Btn::Secondary, [idx] {
+    button(MX + 18, my + 60, BW, 30, tr(L"Reinstall"), Btn::Secondary, [idx] {
         if (game_running(g_ch[idx])) { toast(tr(L"Close the game first.")); return; }
         start_install(idx, false);
     }, !g_installing);
-    button(MX + 154, my + 60, 128, 30, g_confirm_uninstall ? tr(L"Click to confirm") : tr(L"Uninstall"), g_confirm_uninstall ? Btn::Danger : Btn::Ghost, [idx] {
+    button(MX + 26 + BW, my + 60, BW, 30, g_confirm_uninstall ? tr(L"Click to confirm") : tr(L"Uninstall"), g_confirm_uninstall ? Btn::Danger : Btn::Ghost, [idx] {
         Chapter& ch = g_ch[idx];
         if (!g_confirm_uninstall) { g_confirm_uninstall = true; return; }
         g_confirm_uninstall = false;
@@ -1188,14 +1215,14 @@ static void draw_settings(int h) {
         iv_reset();
         toast(ok ? tr(L"Co-op mod removed - your game is back to normal.") : tr(L"Couldn't remove everything - close the game or run the launcher as administrator."));
     }, !iv.empty() && !g_installing);
-    button(MX + 18, my + 98, 128, 30, tr(L"Change folder"), Btn::Ghost, [idx] { browse_folder(g_ch[idx]); });
-    button(MX + 154, my + 98, 128, 30, tr(L"Open folder"), Btn::Ghost, [idx] {
+    button(MX + 18, my + 98, BW, 30, tr(L"Change folder"), Btn::Ghost, [idx] { browse_folder(g_ch[idx]); });
+    button(MX + 26 + BW, my + 98, BW, 30, tr(L"Open folder"), Btn::Ghost, [idx] {
         Chapter& ch = g_ch[idx];
         std::wstring d = dir_exists(mod_dir(ch)) ? mod_dir(ch) : ch.dir;
         ShellExecuteW(nullptr, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     });
     // after a crash: the game log tells what the mod did last - show it so it can be sent to us
-    button(MX + 18, my + 136, 264, 30, tr(L"Show game log (after a crash)"), Btn::Ghost, [idx] {
+    button(MX + 18, my + 136, KW - 36, 30, tr(L"Show game log (after a crash)"), Btn::Ghost, [idx] {
         Chapter& ch = g_ch[idx];
         std::wstring log = bin_dir(ch) + L"\\ue4ss\\UE4SS.log";
         if (!file_exists(log)) { toast(tr(L"No game log yet - start the game once.")); return; }
@@ -1218,7 +1245,6 @@ static void draw_settings(int h) {
                               : tr(L"PoppyCoop_report.zip is on your desktop (log end also copied) - send it to us."));
         } else toast(tr(L"UE4SS.log is selected - send it to us (Discord) together with what happened."));
     });
-    (void)h;
 }
 
 // ------------------------------------------------------------------ profile page
@@ -1452,6 +1478,25 @@ static const double FADE_MS = 230.0;
 
 static int theme_index() { for (int i = 0; i < 3; i++) if (g_theme == THEMES[i].id) return i; return 0; }
 
+static void update_zoom(int w, int h) {
+    double z = std::min(w / g_dpi / BASE_W, h / g_dpi / BASE_H);
+    z = std::max(1.0, std::min(2.5, z));
+    double zmin = std::min(w / g_dpi / MIN_W, h / g_dpi / MIN_H);   // smaller than the minimum anyway: shrink
+    if (zmin < 1.0) z = std::max(0.5, zmin);
+    if (std::fabs(z - g_zoom) < 0.005) return;
+    g_zoom = z; g_s = g_dpi * z;
+    for (HFONT* f : { &F_LOGO, &F_H1, &F_H2, &F_BODY, &F_SMALL, &F_BOLD, &F_CODE, &F_BIG }) if (*f) DeleteObject(*f);
+    make_fonts();
+}
+static void save_window_size() {
+    WINDOWPLACEMENT wp = { sizeof(wp) };
+    if (!g_wnd || !GetWindowPlacement(g_wnd, &wp)) return;
+    if (wp.showCmd == SW_SHOWMINIMIZED) return;
+    RECT r = wp.rcNormalPosition;
+    ini_set(L"Launcher", L"WinW", std::to_wstring((int)((r.right - r.left) / g_dpi)));
+    ini_set(L"Launcher", L"WinH", std::to_wstring((int)((r.bottom - r.top) / g_dpi)));
+    ini_set(L"Launcher", L"WinMax", IsZoomed(g_wnd) ? L"1" : L"0");
+}
 static void paint(HDC wdc, int w, int h) {
     ULONGLONG now = GetTickCount64();
     g_dt = g_frame_ms ? std::min(0.05, (now - g_frame_ms) / 1000.0) : 0.0;
@@ -1466,7 +1511,9 @@ static void paint(HDC wdc, int w, int h) {
     g_hits.clear();
     RECT all = { 0, 0, w, h };
     fill(all, C_BG);
+    update_zoom(w, h);
     int lh = (int)(h / g_s);
+    MW = std::max(636, (int)(w / g_s) - MX - 32);
     draw_sidebar(lh);
     g_view = 0;
     if (g_page == Page::Settings && playable(cur())) draw_settings(lh);
@@ -1698,6 +1745,32 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_ERASEBKGND: return 1;
+    case WM_GETMINMAXINFO: {
+        RECT r = { 0, 0, (int)(MIN_W * g_dpi + 0.5), (int)(MIN_H * g_dpi + 0.5) };
+        AdjustWindowRect(&r, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
+        auto* mm = (MINMAXINFO*)lp;
+        mm->ptMinTrackSize = { r.right - r.left, r.bottom - r.top };
+        return 0;
+    }
+    case WM_SIZE: {
+        // a window manager that ignores the minimum (some Linux desktops): snap back to it
+        if (wp != SIZE_MINIMIZED && wp != SIZE_MAXIMIZED &&
+            (LOWORD(lp) < (int)(MIN_W * g_dpi) - 1 || HIWORD(lp) < (int)(MIN_H * g_dpi) - 1))
+            SetTimer(h, TIMER_MINSIZE, 300, nullptr);   // re-checked after the mouse is let go (WM ignores it while dragging)
+        InvalidateRect(h, nullptr, FALSE);
+        return 0;
+    }
+    case WM_APP_MINSIZE: {
+        RECT cr; GetClientRect(h, &cr);
+        if (IsIconic(h) || IsZoomed(h) || (cr.right >= (int)(MIN_W * g_dpi) - 1 && cr.bottom >= (int)(MIN_H * g_dpi) - 1)) {
+            KillTimer(h, TIMER_MINSIZE); return 0;
+        }
+        RECT r = { 0, 0, std::max((int)cr.right, (int)(MIN_W * g_dpi + 0.5)), std::max((int)cr.bottom, (int)(MIN_H * g_dpi + 0.5)) };
+        AdjustWindowRect(&r, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
+        SetWindowPos(h, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
+    case WM_EXITSIZEMOVE: save_window_size(); return 0;
     case WM_MOUSEMOVE: {
         g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
@@ -1763,6 +1836,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_TIMER:
+        if (wp == TIMER_MINSIZE) { SendMessageW(h, WM_APP_MINSIZE, 0, 0); return 0; }
         if (wp == TIMER_ANIM) { InvalidateRect(h, nullptr, FALSE); return 0; }
         if (wp == TIMER_PROBE) { start_probe(g_page == Page::Servers); return 0; }
         if (wp == TIMER_CARET) { if (g_focus.value) { g_caret_on = !g_caret_on; InvalidateRect(h, nullptr, FALSE); } return 0; }
@@ -1852,13 +1926,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         InvalidateRect(h, nullptr, FALSE);
         return TRUE;
     }
-    case WM_DESTROY: save_profile(); PostQuitMessage(0); return 0;
+    case WM_DESTROY: save_window_size(); save_profile(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, m, wp, lp);
 }
 
 // Developer test hook (POPPYCOOP_LAUNCHER_TEST=1): reads launcher_test.txt next to the exe once a second and
-// replays it - "click X Y" (client coordinates at 96 dpi), "key VK", "type TEXT". Off for normal players.
+// replays it - "click X Y" (client coordinates at 96 dpi), "key VK", "type TEXT", "close". Off for normal players.
 static void test_tick(HWND h) {
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -1882,6 +1956,8 @@ static void test_tick(HWND h) {
             SendMessageW(h, WM_LBUTTONUP, 0, lp);
         } else if (sscanf(line.c_str(), "key %d", &x) == 1) {
             SendMessageW(h, WM_KEYDOWN, (WPARAM)x, 0);
+        } else if (line.rfind("close", 0) == 0) {
+            PostMessageW(h, WM_CLOSE, 0, 0);
         } else if (line.rfind("type ", 0) == 0) {
             for (wchar_t ch : wide(line.substr(5))) if (ch != L'\r') SendMessageW(h, WM_CHAR, ch, 0);
         }
@@ -1978,9 +2054,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     if (!ctx || !ctx((HANDLE)-4)) SetProcessDPIAware();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     HDC sdc = GetDC(nullptr);
-    g_s = GetDeviceCaps(sdc, LOGPIXELSX) / 96.0;
+    g_dpi = GetDeviceCaps(sdc, LOGPIXELSX) / 96.0;
     ReleaseDC(nullptr, sdc);
-    if (g_s < 1.0) g_s = 1.0;
+    if (g_dpi < 1.0) g_dpi = 1.0;
+    g_s = g_dpi;
 
     ini_init();
     g_experimental = ini_get(L"Launcher", L"Experimental", L"0") == L"1";
@@ -2027,11 +2104,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     wc.hIconSm = wc.hIcon;
     wc.lpszClassName = L"PoppyCoopLauncher3";
     RegisterClassExW(&wc);
-    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT r = { 0, 0, S(980), S(640) };
+    DWORD style = WS_OVERLAPPEDWINDOW;             // resizable + maximize; size is remembered
+    RECT work; SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    int ww = _wtoi(ini_get(L"Launcher", L"WinW", L"0").c_str()), wh = _wtoi(ini_get(L"Launcher", L"WinH", L"0").c_str());
+    RECT r = { 0, 0, S(BASE_W), S(BASE_H) };
     AdjustWindowRect(&r, style, FALSE);
+    if (ww <= 0 || wh <= 0) { ww = (int)((r.right - r.left) / g_dpi); wh = (int)((r.bottom - r.top) / g_dpi); }   // first start: 1180x780 inside
+    ww = std::min((int)(ww * g_dpi), (int)(work.right - work.left)); wh = std::min((int)(wh * g_dpi), (int)(work.bottom - work.top));
     g_wnd = CreateWindowExW(0, wc.lpszClassName, L"Poppy Playtime Co-op", style, CW_USEDEFAULT, CW_USEDEFAULT,
-                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, inst, nullptr);
+                            ww, wh, nullptr, nullptr, inst, nullptr);
+    if (ini_get(L"Launcher", L"WinMax", L"0") == L"1" && show != SW_SHOWMINIMIZED && show != SW_SHOWMINNOACTIVE) show = SW_SHOWMAXIMIZED;
     // dark title bar (Windows 10 20H1+ / 11); ignored elsewhere
     if (HMODULE dwm = LoadLibraryW(L"dwmapi.dll")) {
         auto set = (HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD))GetProcAddress(dwm, "DwmSetWindowAttribute");

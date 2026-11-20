@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.5.5"   -- 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.5.6"   -- 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -156,6 +156,15 @@ local function load_config()
         end
     end
     Config.name = tostring(Config.name):gsub("[^%w_%-]", "_"):sub(1, 24)
+    -- launcher "Speedrun mode": only what a run needs is shared (doors/switches/puzzles, inventory, hands,
+    -- checkpoints), everything costly or distracting is off, performance mode on
+    if Config.speedrun == true then
+        local SPEEDRUN = { sync_activations = true, sync_inventory = true, sync_hands = true, sync_levels = true,
+            sync_destroy = false, sync_physics = false, bg_levels = false, respawn_at_friend = false,
+            hard_mode = false, sync_huggy = false, fps60 = false, low_gfx = true, footsteps = false, boost = false,
+            share_checkpoints = true }
+        for k, v in pairs(SPEEDRUN) do Config[k] = v end
+    end
     local hs = normalize_server(Config.host_ip)
     if hs then Config.host_ip = hs
     else print("[PoppyCoop] config.txt host_ip '" .. tostring(Config.host_ip) .. "' is not a usable address\n") end

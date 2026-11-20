@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.5.5.zip`**
+Download **`PoppyCoop_Launcher_1.5.6.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,18 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.5.6
+Small Chapter 1 update.
+- **Speedrun mode (Chapter 1):** a new switch at the top of the Chapter 1 settings. Only what a run needs is shared
+  (doors/switches/puzzles, inventory and keys, GrabPack hands, checkpoints); picked-up items, pullable objects,
+  friends' areas, monsters, harder enemies, footsteps and solid friends are off, performance mode is on.
+- **Chapter 1 checkpoints are shared again:** the furthest checkpoint anyone reached is saved in every game
+  (forward only), so "Load Game" or a respawn puts you at your friend's checkpoint.
+- **Chapter 1 keys are shared** (Giftshop key, Simon room key, security...): a key one player picks up is in
+  everyone's inventory, a key used up is gone for everyone, and dying/loading never takes a team key away.
+- **Chapter 1 doors open for everyone again** - opened by hand, key or code.
+- Launcher window can be resized and maximized and remembers its size.
 
 ### 1.5.5
 Merge of 1.5.0 (Chapters 3-5, Nucleus Co-op) with the new chat and message UI.

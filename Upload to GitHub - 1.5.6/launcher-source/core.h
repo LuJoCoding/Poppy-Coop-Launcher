@@ -180,6 +180,7 @@ static std::vector<KeyBind> default_keys() {
 // chapters: bit 1 = Chapter 1, bit 2 = Chapter 2
 static std::vector<SyncOpt> default_sync() {
     return {
+        { L"speedrun", L"Speedrun mode", L"Only what a run needs (doors, inventory, hands), max fps", 1, false },
         { L"sync_activations", L"Doors, switches & puzzles", L"Doors, power, levers, puzzle parts", 3, true },
         { L"sync_destroy", L"Picked-up items", L"Gone for everyone once picked up", 3, true },
         { L"sync_inventory", L"Shared inventory", L"One team inventory for keys & items", 3, true },

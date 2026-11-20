@@ -24,6 +24,7 @@ local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
 local SYNC_INV = Config.sync_inventory ~= false
+local SHARE_CP1 = Config.share_checkpoints ~= false   -- Chapter 1: friends' checkpoints are saved here too
 local TRACE = Config.trace == true or Config.trace == "true"     -- debug log of every hooked call (slow): off by default
 do  -- or switched on by a file (the launcher rewrites config.txt on every start)
     local f = io.open(P.MOD_DIR .. "\\trace_on.txt", "r")
@@ -469,6 +470,8 @@ end
 local function open_door(a)
     local cname = fullpath(try(function() return a:GetClass() end)) or ""
     local n = 0
+    if cname:find("/DoubleDoors%.") then return call_any(a, "Force Open Door") and 1 or 0 end    -- Chapter 1
+    if cname:find("/SingleDoors_BP%.") then return call_any(a, "Force Door Open") and 1 or 0 end
     if cname:find("DoorChildBP", 1, true) then
         if call_any(a, "Force Door Open") then n = n + 1 end
         local parent = try(function() return a:GetParentActor() end)
@@ -503,7 +506,7 @@ local function cp_fix_tick()
     if not CP_FIX then return end
     local n = CP_FIX
     CP_FIX = nil
-    local gm = try(FindFirstOf, "Chapter2_Gamemode_C")
+    local gm = try(FindFirstOf, P.CHAPTER == 1 and "Chapter1_Gamemode_C" or "Chapter2_Gamemode_C")
     if not valid(gm) then return end
     replaying = replaying + 1
     local ok = pcall(function() gm["Save New Checkpoint"](gm, n) end)
@@ -511,6 +514,30 @@ local function cp_fix_tick()
     trace("checkpoint restored to %d (%s)", n, tostring(ok))
 end
 local function cp_number(args) return tonumber(tostring(args or ""):match("^n:(%-?%d+)")) end
+-- Chapter 1 (worked like this in 1.1): the furthest checkpoint anyone reached is saved in every game, so
+-- "Load Game" (and a respawn) puts everyone there. Saving a checkpoint in Chapter 1 only writes the save
+-- slot (no level streaming), so it is safe to do while the player is somewhere else. Forward only.
+local CP1_PENDING = nil
+local function cp1_apply(n)
+    if P.CHAPTER ~= 1 or not SHARE_CP1 or not n or n <= CP_MAX then return end
+    CP_MAX = n
+    CP1_PENDING = n
+end
+local function cp1_tick()
+    if not CP1_PENDING then return end
+    local gm = try(FindFirstOf, "Chapter1_Gamemode_C")
+    if not valid(gm) then return end                 -- loading: try again next tick
+    local n = CP1_PENDING
+    CP1_PENDING = nil
+    replaying = replaying + 1
+    local ok = pcall(function() gm["Save New Checkpoint"](gm, n) end)
+    replaying = replaying - 1
+    log("friend's checkpoint %d saved here (Load Game starts there) %s", n, ok and "" or "FAILED")
+end
+Coop.on("cp1", function(from, rest) cp1_apply(tonumber(rest)) end)
+table.insert(P.Handlers.join, function(id)
+    if P.CHAPTER == 1 and SHARE_CP1 and CP_MAX >= 0 then Coop.send_to(id, "cp1", tostring(CP_MAX)) end
+end)
 -- Game controllers of deadly minigames/chases: replaying their start (ElectricalInterface) in a game whose
 -- player is elsewhere ran the game against THAT player - e.g. a friend started Statues and the PJ game killed a
 -- player in the hub. Such events wait (pending) until our player is near the controller.
@@ -759,6 +786,8 @@ local DOOR_FNS = { "DoorInteraction", "DoorOpen", "Force Door Open", "Force Inte
     "On Door Interact Door", "On Door Interact Left", "Remove3DItemFromPlayerInventory", "On Interact",
     -- Chapter 1 doors
     "Event Open Door", "UnlockAndOpenDoor", "Force Open Door", "Open Left Door Event", "Open Right Door Event" }
+local CH1_DOOR_OPEN = { ["Event Open Door"] = true, UnlockAndOpenDoor = true, ["Open Left Door Event"] = true,
+    ["Open Right Door Event"] = true, ["Force Open Door"] = true, ["Force Door Open"] = true }
 local DOOR_SET = {}
 for _, f in ipairs(DOOR_FNS) do DOOR_SET[f] = true end
 local function is_door_class(cname)
@@ -865,6 +894,10 @@ remote_allowed = function(e)
         if not is_level_placed(e.path) then return false end
         if is_checkpoint_event(e.path, e.fn) then return false end
         if ACT_SET[e.fn] or REMAP_TARGETS[e.fn] then return true end
+        if e.fn == "CoopOpenDoor" then
+            local a = find_actor(e.path)
+            return a == nil or is_door_class(fullpath(try(function() return a:GetClass() end)) or "") ~= nil
+        end
         if e.fn == "On Interact" then return replay_interact(e.path) end
         if lsa_fn(e.fn) then
             local a = find_actor(e.path)
@@ -992,8 +1025,12 @@ local function on_local_call(cname, fnname, ctx, ...)
             if P.popup and LOCAL_CP_SEEN then pcall(P.popup, ("Checkpoint %d - %d:%02d:%02d"):format(n, t // 3600, t // 60 % 60, t % 60), "cp") end
             LOCAL_CP_SEEN = true
         end
-        if n and n > CP_MAX then CP_MAX = n
-        elseif n and n < CP_MAX and replaying > 0 then CP_FIX = CP_MAX end   -- an older trigger was replayed here
+        if n and n > CP_MAX then
+            CP_MAX = n
+            if P.CHAPTER == 1 and SHARE_CP1 and replaying == 0 and Coop.active() then Coop.send_event("cp1", tostring(n)) end
+        elseif n and n < CP_MAX and (replaying > 0 or (P.CHAPTER == 1 and SHARE_CP1)) then
+            CP_FIX = CP_MAX     -- an older trigger was replayed here / Chapter 1: keep the furthest saved
+        end
     end
     if replaying > 0 or not Coop.active() or not path then return end
     if is_checkpoint_event(path, fnname) then return end      -- see is_checkpoint_event
@@ -1040,7 +1077,14 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     -- Chapter 2 doors are synced by the leaves' real rotation (pose sync in coop_extra); replaying
     -- their functions would snap them open the wrong way and would use up the other player's key.
-    if DOOR_SET[fnname] and is_door_class(cname) then return end
+    if DOOR_SET[fnname] and is_door_class(cname) then
+        -- Chapter 1 doors: a player opened it (by hand, with a key, a code...) -> the other games run the
+        -- door's own "force open" (opens a locked door without needing the key there)
+        if P.CHAPTER == 1 and SYNC_ACT and CH1_DOOR_OPEN[fnname] and is_level_placed(path) then
+            share({ kind = "act", path = path, fn = "CoopOpenDoor", args = "" })
+        end
+        return
+    end
     if PICKUP_SET[fnname] and is_level_placed(path) then
         watch_actor(path)
         if SYNC_DESTROY then share({ kind = "destroy", path = path }) end
@@ -1737,6 +1781,84 @@ local diag_done = false
 
 table.insert(P.Handlers.restart, function() scan_classes() end)
 
+------------------------------------------------------------------ Chapter 1 keys (team inventory)
+-- Keys (GiftshopKey, SimonRoomKey, Security...) go into the player's "Inventory Items" string array straight
+-- from the pickup blueprint, without a function the hooks could see. So the array is watched: a key that
+-- shows up here is given to everyone, a key used up here is taken from everyone. After a load / respawn the
+-- game restores the array from its save - that is never treated as a change; missing team keys are put back.
+local Inv1 = { last = nil, team = {}, t = 0, addr = nil }
+local function inv1_set(list) local t = {} for _, v in ipairs(list) do t[v] = true end return t end
+local function inv1_has(p, name)
+    for _, v in ipairs(name_array(p, "Inventory Items")) do if v == name then return true end end
+    return false
+end
+local function inv1_add(p, name)
+    if inv1_has(p, name) then return true end
+    local arr = try(function() return p["Inventory Items"] end)
+    local n = arr and try(function() return arr:GetArrayNum() end)
+    if type(n) ~= "number" then return false end
+    return pcall(function() arr[n + 1] = name end)
+end
+local function inv1_remove(p, name)
+    if not inv1_has(p, name) then return end
+    replaying = replaying + 1
+    pcall(function() p["Remove Item From Inventory"](p, name) end)
+    replaying = replaying - 1
+end
+local function inv1_valid_name(s) return type(s) == "string" and #s > 0 and #s <= 64 and s:match("^[%w_ %-]+$") ~= nil end
+Coop.on("inv1", function(from, rest)
+    if P.CHAPTER ~= 1 or not SYNC_INV then return end
+    local op, name = tostring(rest or ""):match("^([%+%-])(.+)$")
+    if not op or not inv1_valid_name(name) then return end
+    Inv1.team[name] = op == "+" or nil
+    local p = pawn()
+    if not valid(p) then return end
+    if op == "+" then
+        if inv1_add(p, name) then log("key from %s: %s", tostring(from), name) end
+    else
+        inv1_remove(p, name)
+    end
+    if Inv1.last then Inv1.last[name] = op == "+" or nil end
+end)
+table.insert(P.Handlers.join, function(id)
+    if P.CHAPTER ~= 1 or not SYNC_INV then return end
+    for name in pairs(Inv1.team) do Coop.send_to(id, "inv1", "+" .. name) end
+end)
+local function inv1_reset() Inv1.last, Inv1.addr = nil, nil end
+table.insert(P.Handlers.unload, inv1_reset)
+table.insert(P.Handlers.restart, inv1_reset)
+local function inv1_tick()
+    if P.CHAPTER ~= 1 or not SYNC_INV then return end
+    local p = pawn()
+    if not valid(p) then return end
+    local a = try(function() return p:GetAddress() end)
+    local cur = inv1_set(name_array(p, "Inventory Items"))
+    if not Inv1.last or Inv1.addr ~= a then
+        -- fresh load / new pawn: this is the saved state, not a change. Give back what the team holds.
+        Inv1.addr = a
+        for name in pairs(Inv1.team) do if not cur[name] and inv1_add(p, name) then cur[name] = true end end
+        Inv1.last = cur
+        return
+    end
+    if not Coop.active() then Inv1.last = cur; return end
+    for name in pairs(cur) do
+        if not Inv1.last[name] and inv1_valid_name(name) then
+            Inv1.team[name] = true
+            Coop.send_event("inv1", "+" .. name)
+            log("shared key: %s", name)
+        end
+    end
+    for name in pairs(Inv1.last) do
+        if not cur[name] and inv1_valid_name(name) then
+            Inv1.team[name] = nil
+            Coop.send_event("inv1", "-" .. name)
+            log("key used up: %s", name)
+        end
+    end
+    Inv1.last = cur
+end
+P.Inv1 = Inv1     -- diagnostics
+
 table.insert(P.Handlers.tick, function(dt, have)
     local crumb = P.crumb or function() end
     if #FrameQ > 0 then crumb("world: flush"); pcall(flush_shares) end
@@ -1744,6 +1866,7 @@ table.insert(P.Handlers.tick, function(dt, have)
     if AutoFollow and have then pcall(auto_follow_tick) end
     if not have or not pawn() then return end
     local now = P.game_time()
+    if now - Inv1.t > 0.5 then Inv1.t = now; pcall(inv1_tick) end
     if now - t_follow > 1 then t_follow = now; pcall(check_auto_follow) end
     if now - t_pending > 5 and next(Pending) then t_pending = now; pcall(retry_pending) end   -- e.g. gated controllers once we are near
     if now - t_scan > 1 then
@@ -1766,7 +1889,7 @@ table.insert(P.Handlers.tick, function(dt, have)
     if now - t_levels > 2 then
         t_levels = now
         local c0 = os.clock()
-        crumb("world: sync_levels"); sync_levels(); crumb("world: cp_fix"); pcall(cp_fix_tick)
+        crumb("world: sync_levels"); sync_levels(); crumb("world: cp_fix"); pcall(cp_fix_tick); pcall(cp1_tick)
         local S = P.Perf and P.Perf.sec
         if S then S.w_levels = (S.w_levels or 0) + os.clock() - c0 end
         if os.clock() - c0 > 0.005 then log("slow: level sync %.1f ms (slots %.1f ms, list age %.0f s)", (os.clock() - c0) * 1000, (SyncProf.scan or 0) * 1000, now - SlotListAt) end
