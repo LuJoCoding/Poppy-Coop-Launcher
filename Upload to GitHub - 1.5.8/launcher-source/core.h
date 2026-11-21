@@ -213,7 +213,7 @@ static void chapters_init() {
     g_ch.push_back({ 1, L"A Tight Squeeze", L"READY",
         L"Explore the abandoned toy factory together. Doors, power, puzzles, items, pullable objects and loaded areas are shared with everyone in your room.",
         L"Poppy_Playtime.exe", L"Poppy_Playtime", L"Poppy_Playtime-Win64-Shipping.exe", L"Poppy Playtime", L"1721470", L"GameDir", true });
-    g_ch.push_back({ 2, L"Fly in a Web", L"BETA",
+    g_ch.push_back({ 2, L"Fly in a Web", L"READY",
         L"Explore the Game Station together. Doors, keys and items, power, checkpoints, pullable objects and loaded areas are shared - and Musical Memory and Whack-a-Wuggy are played together.",
         L"Playtime_Prototype4.exe", L"Playtime_Prototype4", L"Playtime_Prototype4-Win64-Shipping.exe", L"Poppy Playtime Chapter 2", L"1817490", L"GameDir2", false });
     static const wchar_t* EXP_BLURB = L"Experimental: you see each other, can teleport, ping and chat. Doors, puzzles and items are NOT shared yet, and the game may crash.";

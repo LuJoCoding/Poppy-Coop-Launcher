@@ -16,7 +16,7 @@ New compared to the original:
   Everyone you play with has to pick the same server.
 - One exe for Windows and Linux (Steam/Proton). Name, colour, codes and game folders from the old
   launcher are kept.
-- Chapter 2 is playable in the launcher (beta).
+- Chapter 2 is fully playable in the launcher.
 - Real player figures in Chapter 2: full-body figure with GrabPack (backpack, launchers, hands),
   animations for standing, walking, running, crouching, jumping; launched hands fly with a black
   cable to where your friend actually shoots; the green hand is shown green on the figure.

@@ -3,6 +3,7 @@
 #include "crashreport.h"
 #include "friends.h"
 #include "friends_net.h"
+#include "logs.h"
 #include <windowsx.h>
 #include <shobjidl.h>
 #include <functional>
@@ -132,6 +133,29 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Server & connection", L"Server & Verbindung" },
         { L"Set up  \x203A", L"Einrichten  \x203A" },
         { L"Settings", L"Einstellungen" },
+        { L"Logs", L"Logs" },
+        { L"Logs & crashes", L"Logs & Abstürze" },
+        { L"Running now", L"Läuft gerade" },
+        { L"game crashed", L"Spiel abgestürzt" },
+        { L"Crash report only - the session's log was overwritten", L"Nur Absturzbericht - das Log dieser Sitzung wurde überschrieben" },
+        { L"under 1 min", L"unter 1 Min" },
+        { L" errors", L" Fehler" },
+        { L" logs", L" Logs" },
+        { L"Refresh", L"Aktualisieren" },
+        { L"Your last game sessions. Crashed ones are red - send us the report zip or copy the log into Discord.", L"Deine letzten Spielsitzungen. Abgestürzte sind rot - schick uns die Bericht-Zip oder kopier das Log in Discord." },
+        { L"No logs yet - they show up here after you played this chapter once.", L"Noch keine Logs - sie erscheinen hier, sobald du dieses Kapitel einmal gespielt hast." },
+        { L"Crashed", L"Abgestürzt" },
+        { L"  -  arrow keys / click to scroll", L"  -  Pfeiltasten / Mausrad" },
+        { L"LIVE LOG", L"LIVE-LOG" },
+        { L"CRASH", L"ABSTURZ" },
+        { L"END OF THE LOG", L"ENDE DES LOGS" },
+        { L"Copy for Discord", L"Für Discord kopieren" },
+        { L"Copied - paste it in Discord (Ctrl+V).", L"Kopiert - in Discord einfügen (Strg+V)." },
+        { L"Report zip", L"Bericht-Zip" },
+        { L"Couldn't make the zip - use Copy for Discord or Open folder.", L"Zip ging nicht - nimm Für Discord kopieren oder Ordner öffnen." },
+        { L"PoppyCoop_report.zip is on your desktop - send it to us.", L"PoppyCoop_report.zip liegt auf deinem Desktop - schick sie uns." },
+        { L"Open log", L"Log öffnen" },
+        { L"This crash has no log any more.", L"Zu diesem Absturz gibt es kein Log mehr." },
         { L"Share the code or the invite. Friends pick Join Game and enter it.", L"Teile den Code oder die Einladung. Freunde wählen Beitreten und geben ihn ein." },
         { L"Show game log (after a crash)", L"Spiel-Log zeigen (nach Absturz)" },
         { L"PoppyCoop_report.zip is on your desktop (log end also copied) - send it to us.", L"PoppyCoop_report.zip liegt auf dem Desktop (Log-Ende auch kopiert) - schick es uns." },
@@ -334,31 +358,23 @@ static std::wstring tr(const std::wstring& en) {
 }
 
 static const wchar_t* WHATS_NEW =
-    L"- Fixed: doors, levers, items and checkpoints stopped syncing after a while. After a short connection hiccup\n"
-    L"  the whole world state was sent at once and got lost - messages are now bundled and sent in portions.\n"
-    L"- Fixed: crashes after respawning / Load Game (the message boxes of the old world were still used).\n"
-    L"- Chapter 1: checkpoints are shared again - Load Game and respawns put you at the furthest one (sent at once).\n"
-    L"- Chapter 1: keys and doors are shared; joining later gets everything done before, also after a crash.\n"
-    L"- Pullable objects no longer spin wildly on the other screen.\n"
-    L"- Speedrun mode (Chapter 1 settings): only what a run needs is shared, best fps.\n"
-    L"- The launcher updates itself when it starts (Launcher settings: Automatic updates).\n"
-    L"- The last game log is kept (UE4SS_previous.log); Report a problem adds it and the game's crash report.\n"
-    L"- Chat: the text you type is readable. The window can be resized.";
+    L"- New: Logs page for every chapter (button next to Settings). It lists your last game sessions with time,\n"
+    L"  length and errors; crashed ones are red with the crash message. Copy for Discord or make a report zip.\n"
+    L"- Chapter 2 is out of beta.\n"
+    L"\n"
+    L"From 1.5.7: doors, levers, items and checkpoints keep syncing after connection hiccups, no more crashes\n"
+    L"after respawn / Load Game, Chapter 1 shares checkpoints, keys and doors, Speedrun mode, automatic updates.";
 static const wchar_t* WHATS_NEW_DE =
-    L"- Behoben: Türen, Hebel, Gegenstände und Checkpoints wurden nach einer Weile nicht mehr geteilt. Nach einem kurzen\n"
-    L"  Verbindungsaussetzer ging der ganze Spielstand auf einmal raus und verloren - jetzt gebündelt und in Portionen.\n"
-    L"- Behoben: Abstürze nach dem Respawn / Spiel laden (die Nachrichtenfenster der alten Welt wurden weiter benutzt).\n"
-    L"- Kapitel 1: Checkpoints werden wieder geteilt - Spiel laden und Respawn bringen dich zum weitesten (sofort).\n"
-    L"- Kapitel 1: Schlüssel und Türen werden geteilt; wer später kommt, bekommt alles - auch nach einem Absturz.\n"
-    L"- Ziehbare Objekte drehen sich beim anderen nicht mehr wild.\n"
-    L"- Speedrun-Modus (Kapitel-1-Einstellungen): nur was ein Run braucht, beste fps.\n"
-    L"- Der Launcher aktualisiert sich beim Start selbst (Launcher-Einstellungen: Automatische Updates).\n"
-    L"- Das letzte Spiel-Log bleibt erhalten (UE4SS_previous.log); Problem melden packt es mit dem Absturzbericht ein.\n"
-    L"- Chat: getippter Text ist lesbar. Das Fenster lässt sich vergrößern.";
+    L"- Neu: Logs-Seite für jedes Kapitel (Knopf neben Einstellungen). Sie zeigt deine letzten Spielsitzungen mit Zeit,\n"
+    L"  Dauer und Fehlern; abgestürzte sind rot mit der Absturzmeldung. Für Discord kopieren oder Bericht-Zip erstellen.\n"
+    L"- Kapitel 2 ist keine Beta mehr.\n"
+    L"\n"
+    L"Aus 1.5.7: Türen, Hebel, Gegenstände und Checkpoints bleiben nach Verbindungsaussetzern synchron, keine Abstürze\n"
+    L"mehr nach Respawn / Spiel laden, Kapitel 1 teilt Checkpoints, Schlüssel und Türen, Speedrun-Modus, Auto-Updates.";
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
 
 // ------------------------------------------------------------------ state
-enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends };
+enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends, Logs };
 
 static HWND g_wnd;
 static Profile g_prof;
@@ -375,6 +391,8 @@ static bool g_launch_after_install = false;
 static int g_starting_ch = -1;               // waiting for the game process to appear
 static ULONGLONG g_starting_t0 = 0;
 static bool g_running[8] = {};
+static std::vector<LogEntry> g_logs;         // Logs page: sessions + crashes of the selected chapter (read when opened)
+static int g_log_sel = 0;
 static int g_capture = -1;                   // key row waiting for a key press (settings page)
 static bool g_confirm_uninstall = false;
 static std::wstring g_edit_name;             // profile page buffer
@@ -613,6 +631,7 @@ static void badge(int x, int y, const wchar_t* label) {
 // ------------------------------------------------------------------ actions
 static void start_install(int ch, bool then_launch);
 static void do_play();
+static void open_logs();
 static void set_experimental(bool on);
 
 static void copy_text(const std::wstring& s) {
@@ -896,9 +915,10 @@ static std::wstring system_summary() {
 }
 // returns the zip path (on the desktop) or "" when Windows' tar isn't there (old Windows, Wine)
 // the game's newest crash report (%LOCALAPPDATA%\\<Project>\\Saved\\Crashes\\<id>\\): call stack + minidump
-static void copy_newest_crash(const Chapter& ch, const std::wstring& to) {
+static void copy_newest_crash(const Chapter& ch, const std::wstring& to, const std::wstring& crash_dir = L"") {
     CrashInfo ci;
-    if (!newest_crash(ch, ci)) return;
+    if (!crash_dir.empty()) ci.dir = crash_dir;
+    else if (!newest_crash(ch, ci)) return;
     for (const wchar_t* f : { L"CrashContext.runtime-xml", L"UE4Minidump.dmp", L"UEMinidump.dmp" })
         CopyFileW((ci.dir + f).c_str(), (to + L"\\crash_" + f).c_str(), FALSE);
 }
@@ -938,7 +958,7 @@ static void ask_crash_consent() {
     ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
 }
 
-static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log) {
+static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log, const std::wstring& crash_dir = L"") {
     wchar_t tmp[MAX_PATH], sys[MAX_PATH], desk[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, tmp) || !GetSystemDirectoryW(sys, MAX_PATH)) return L"";
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, desk))) return L"";
@@ -949,8 +969,16 @@ static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log) 
     CreateDirectoryW(dir.c_str(), nullptr);
     CopyFileW(log.c_str(), (dir + L"\\UE4SS.log").c_str(), FALSE);
     CopyFileW((bin_dir(ch) + L"\\ue4ss\\UE4SS_previous.log").c_str(), (dir + L"\\UE4SS_previous.log").c_str(), FALSE);
-    copy_newest_crash(ch, dir);
+    copy_newest_crash(ch, dir, crash_dir);
     std::wstring mod = bin_dir(ch) + L"\\ue4ss\\Mods\\PoppyCoop\\";
+    {   // network helper logs (queue full / timeouts)
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((mod + L"net_*.log").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do CopyFileW((mod + fd.cFileName).c_str(), (dir + L"\\" + fd.cFileName).c_str(), FALSE); while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+    }
     for (const wchar_t* f : { L"config.txt", L"keybinds.txt", L"bugreport.txt" }) CopyFileW((mod + f).c_str(), (dir + L"\\" + f).c_str(), FALSE);
     std::wstring info = system_summary() + L"Chapter " + std::to_wstring(ch.num) + L", installed mod v" + inst_ver(ch) + L"\r\nGame folder " + ch.dir + L"\r\n";
     std::string u8;
@@ -1168,7 +1196,7 @@ static void draw_play_bar(Chapter& c, int y) {
 static void draw_chapter(int h) {
     Chapter& c = cur();
     text(R(MX, 28, 300, 18), tr(L"CHAPTER ") + std::to_wstring(c.num), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
-    text(R(MX, 46, MW - 160, 40), c.title, F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW - 280, 40), c.title, F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
     badge(MX + text_w(c.title, F_H1) + 14, 60, badge_of(c));
     if (!playable(c)) {
         g_view = 1;
@@ -1188,8 +1216,10 @@ static void draw_chapter(int h) {
     // the setup card stays until the player pressed "Install" once (or the mod is already there)
     bool ready = dir_usable(c.state) && !trim(g_prof.name).empty() && !(g_installing && g_install_ch == g_sel)
                  && (!inst_ver(c).empty() || setup_done(c));
-    if (ready)
+    if (ready) {
         button(MX + MW - 130, 50, 130, 36, tr(L"Settings"), Btn::Ghost, [] { g_page = Page::Settings; g_focus = {}; g_capture = -1; g_confirm_uninstall = false; });
+        button(MX + MW - 250, 50, 110, 36, tr(L"Logs"), Btn::Ghost, [] { open_logs(); });
+    }
     text(R(MX, 98, MW, 44), tr(c.blurb), F_SMALL, C_DIM);
     if (!ready) { draw_setup(c, 152); return; }
     g_view = 4;
@@ -1369,29 +1399,122 @@ static void draw_settings(int h) {
         std::wstring d = dir_exists(mod_dir(ch)) ? mod_dir(ch) : ch.dir;
         ShellExecuteW(nullptr, L"open", d.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     });
-    // after a crash: the game log tells what the mod did last - show it so it can be sent to us
-    button(MX + 18, my + 136, KW - 36, 30, tr(L"Show game log (after a crash)"), Btn::Ghost, [idx] {
-        Chapter& ch = g_ch[idx];
-        std::wstring log = bin_dir(ch) + L"\\ue4ss\\UE4SS.log";
-        if (!file_exists(log)) { toast(tr(L"No game log yet - start the game once.")); return; }
-        // problem report: a zip on the desktop with the log, the mod settings and a system summary
-        std::wstring shown = log;
-        std::wstring zip = make_report_zip(ch, log);
-        if (!zip.empty()) shown = zip;
-        std::wstring args = L"/select,\"" + shown + L"\"";
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-        // also copy a short report (versions + the last 80 log lines) for pasting into Discord
-        std::string data;
-        if (read_file(log, data)) {
-            size_t pos = data.size();
-            for (int n = 0; n < 81 && pos > 0; ) { pos--; if (data[pos] == '\n') n++; }
-            std::string tail = data.substr(pos);
-            std::wstring rep = L"PoppyCoop report - mod v" MOD_VERSION L", launcher " LAUNCHER_VERSION L", Chapter " + std::to_wstring(ch.num)
-                + L", installed v" + inst_ver(ch) + L"\r\n```\r\n" + std::wstring(tail.begin(), tail.end()) + L"\r\n```";
-            copy_text(rep);
-            toast(zip.empty() ? tr(L"Log selected + its end copied - paste it in Discord (Ctrl+V).")
-                              : tr(L"PoppyCoop_report.zip is on your desktop (log end also copied) - send it to us."));
-        } else toast(tr(L"UE4SS.log is selected - send it to us (Discord) together with what happened."));
+    // after a crash: the Logs page lists the last sessions and crash reports (copy for Discord / report zip)
+    button(MX + 18, my + 136, KW - 36, 30, tr(L"Logs & crashes"), Btn::Ghost, [] { open_logs(); });
+}
+
+// ------------------------------------------------------------------ logs page (last sessions + crash reports of a chapter)
+static void open_logs() {
+    g_logs = scan_logs(cur(), g_running[g_sel]);
+    g_log_sel = 0;
+    g_page = Page::Logs; g_focus = {}; g_capture = -1; g_confirm_uninstall = false;
+}
+
+static std::wstring log_title(const LogEntry& e) {
+    if (e.running) return tr(L"Running now");
+    std::wstring t = ft_local_string(e.start ? e.start : e.end, L"");
+    if (e.path.empty()) return t + L"  -  " + tr(L"game crashed");
+    return t;
+}
+static std::wstring log_sub(const LogEntry& e) {
+    std::wstring s;
+    if (e.path.empty()) return tr(L"Crash report only - the session's log was overwritten");
+    if (e.start && e.end > e.start) {
+        ULONGLONG mins = (e.end - e.start) / (60 * FT_SECOND);
+        s = mins < 1 ? tr(L"under 1 min") : std::to_wstring(mins) + L" min";
+    }
+    if (!e.version.empty()) s += (s.empty() ? L"" : L"  -  ") + std::wstring(L"v") + e.version;
+    if (e.errors) s += L"  -  " + std::to_wstring(e.errors) + tr(L" errors");
+    return s;
+}
+
+static void draw_logs(int h) {
+    Chapter& c = cur();
+    button(MX, 26, 96, 32, tr(L"\x2039  Back"), Btn::Ghost, [] { g_page = Page::Chapter; });
+    text(R(MX + 112, 28, MW - 250, 30), tr(L"Chapter ") + std::to_wstring(c.num) + tr(L" logs"), F_BIG, C_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    button(MX + MW - 130, 26, 130, 32, tr(L"Refresh"), Btn::Ghost, [] { int s = g_log_sel; open_logs(); g_log_sel = std::min(s, std::max(0, (int)g_logs.size() - 1)); });
+    text(R(MX, 66, MW, 20), tr(L"Your last game sessions. Crashed ones are red - send us the report zip or copy the log into Discord."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (g_logs.empty()) {
+        RECT card = R(MX, 100, MW, 90);
+        fill(card, C_CARD, 14);
+        text(R(MX + 24, 122, MW - 48, 50), tr(L"No logs yet - they show up here after you played this chapter once."), F_BODY, C_DIM);
+        return;
+    }
+    // list (left) + preview of the selected entry (right)
+    const int LW = std::max(260, std::min(330, MW * 2 / 5)), RH = 52, top = 98;
+    const int fit = std::max(1, (h - top - 30) / (RH + 6));
+    int first = std::max(0, std::min(g_log_sel - fit + 1, (int)g_logs.size() - fit));
+    first = std::max(0, std::min(first, g_log_sel));
+    for (int i = first; i < (int)g_logs.size() && i < first + fit; i++) {
+        const LogEntry& e = g_logs[i];
+        int y = top + (i - first) * (RH + 6);
+        RECT r = R(MX, y, LW, RH);
+        bool sel = i == g_log_sel;
+        fill(r, sel ? mix(C_CARD, accent(), 0.18) : hover(r) ? C_CARD2 : C_CARD, 10);
+        if (sel) frame(r, accent(), 10, 2);
+        COLORREF dot = e.running ? C_OK : !e.crash_dir.empty() ? C_BAD : e.errors ? C_WARN : mix(C_DIM, C_CARD, 0.3);
+        circle(MX + 18, y + RH / 2, 5, dot);
+        text(R(MX + 32, y + 7, LW - 44, 20), log_title(e), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        std::wstring sub = !e.crash_dir.empty() && !e.path.empty() ? tr(L"Crashed") + L"  -  " + log_sub(e) : log_sub(e);
+        text(R(MX + 32, y + 28, LW - 44, 18), sub, F_SMALL, !e.crash_dir.empty() ? C_BAD : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        click(r, [i] { g_log_sel = i; });
+    }
+    if ((int)g_logs.size() > fit) {
+        int y = top + fit * (RH + 6) - 2;
+        text(R(MX, y, LW, 18), std::to_wstring(g_log_sel + 1) + L" / " + std::to_wstring(g_logs.size()) + tr(L"  -  arrow keys / click to scroll"), F_SMALL, C_DIM, DT_CENTER | DT_SINGLELINE);
+    }
+
+    if (g_log_sel >= (int)g_logs.size()) g_log_sel = 0;
+    const LogEntry& e = g_logs[g_log_sel];
+    const int PX = MX + LW + 12, PW = MW - LW - 12, PH = h - top - 30;
+    RECT pc = R(PX, top, PW, PH);
+    fill(pc, C_CARD, 14);
+    int y = top + 14;
+    text(R(PX + 18, y, PW - 36, 18), e.running ? tr(L"LIVE LOG") : !e.crash_dir.empty() ? tr(L"CRASH") : tr(L"END OF THE LOG"), F_SMALL, !e.crash_dir.empty() ? C_BAD : acc_text(), DT_LEFT | DT_SINGLELINE);
+    y += 24;
+    const int LH = 17, bottom = top + PH - 96;
+    if (!e.crash_msg.empty()) {
+        size_t p = 0;
+        for (int n = 0; p < e.crash_msg.size() && n < 6 && y < bottom; n++) {
+            size_t q = e.crash_msg.find('\n', p);
+            std::string l = e.crash_msg.substr(p, q == std::string::npos ? std::string::npos : q - p);
+            if (!l.empty()) { text(R(PX + 18, y, PW - 36, LH), wide(l), n == 0 ? F_BOLD : F_SMALL, n == 0 ? C_BAD : C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS); y += LH + (n == 0 ? 3 : 0); }
+            if (q == std::string::npos) break;
+            p = q + 1;
+        }
+        y += 8;
+    }
+    // last log lines, as many as fit
+    int room = std::max(0, (bottom - y) / LH);
+    size_t n = std::min((size_t)room, e.tail.size());
+    for (size_t k = e.tail.size() - n; k < e.tail.size(); k++) {
+        const std::string& l = e.tail[k];
+        bool err = l.find("Error") != std::string::npos || l.find("traceback") != std::string::npos;
+        text(R(PX + 18, y, PW - 36, LH), wide(l), F_SMALL, err ? C_WARN : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        y += LH;
+    }
+    // actions
+    int by = top + PH - 84, bw = (PW - 36 - 10) / 2;
+    int idx = g_sel;
+    LogEntry ent = e;
+    button(PX + 18, by, bw, 32, tr(L"Copy for Discord"), Btn::Secondary, [idx, ent] {
+        copy_text(log_report_text(g_ch[idx], ent));
+        toast(tr(L"Copied - paste it in Discord (Ctrl+V)."));
+    });
+    button(PX + 28 + bw, by, bw, 32, tr(L"Report zip"), Btn::Primary, [idx, ent] {
+        std::wstring log = ent.path.empty() ? bin_dir(g_ch[idx]) + L"\\ue4ss\\UE4SS.log" : ent.path;
+        std::wstring zip = make_report_zip(g_ch[idx], log, ent.crash_dir);
+        if (zip.empty()) { toast(tr(L"Couldn't make the zip - use Copy for Discord or Open folder.")); return; }
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + zip + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+        toast(tr(L"PoppyCoop_report.zip is on your desktop - send it to us."));
+    });
+    button(PX + 18, by + 40, bw, 32, tr(L"Open log"), Btn::Ghost, [ent] {
+        if (ent.path.empty()) { toast(tr(L"This crash has no log any more.")); return; }
+        ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + ent.path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    }, !e.path.empty());
+    button(PX + 28 + bw, by + 40, bw, 32, tr(L"Open folder"), Btn::Ghost, [ent] {
+        std::wstring f = ent.path.empty() ? ent.crash_dir : ent.path;
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + f + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
     });
 }
 
@@ -1937,6 +2060,7 @@ static void paint(HDC wdc, int w, int h) {
     else if (g_page == Page::App) draw_app(lh);
     else if (g_page == Page::Servers) draw_servers(lh);
     else if (g_page == Page::Friends) draw_friends(lh);
+    else if (g_page == Page::Logs && playable(cur())) draw_logs(lh);
     else draw_chapter(lh);
 
     // toast: fades and slides in, fades out
@@ -2097,6 +2221,7 @@ static void launch_now(int idx) {
     Chapter& c = g_ch[idx];
     if (g_prof.tab == 2) remember_code(g_prof.join_code);
     if (!write_mod_settings(c, g_prof)) { toast(tr(L"Couldn't save the mod settings - try running the launcher as administrator.")); return; }
+    archive_logs(c);
     if (!launch_game(c)) { toast(tr(L"Couldn't start the game.")); return; }
     g_starting_ch = idx; g_starting_t0 = GetTickCount64();
     toast(via_steam(c) ? tr(L"Starting Poppy Playtime - Steam may take a few seconds") : tr(L"Starting Poppy Playtime..."));
@@ -2214,8 +2339,18 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
+    case WM_MOUSEWHEEL:
+        if (g_page == Page::Logs && !g_logs.empty()) {
+            g_log_sel = std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (GET_WHEEL_DELTA_WPARAM(wp) < 0 ? 1 : -1)));
+            InvalidateRect(h, nullptr, FALSE);
+        }
+        return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g_capture >= 0) { set_key((UINT)wp); InvalidateRect(h, nullptr, FALSE); return 0; }
+        if (g_page == Page::Logs && !g_logs.empty() && (wp == VK_UP || wp == VK_DOWN)) {
+            g_log_sel = std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (wp == VK_DOWN ? 1 : -1)));
+            InvalidateRect(h, nullptr, FALSE); return 0;
+        }
         if (g_focus.value && wp == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             std::wstring t = clipboard_text();
             if (g_focus.code) t = extract_code(t);
@@ -2257,7 +2392,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             for (size_t i = 0; i < g_ch.size() && i < 8; i++) {
                 bool r = game_running(g_ch[i]);
                 if (r != g_running[i]) {
-                    if (!r) g_crash_check_at = GetTickCount64() + 10000;   // the crash reporter writes its folder after the exit
+                    if (!r) { g_crash_check_at = GetTickCount64() + 10000; archive_logs(g_ch[i]); }   // the crash reporter writes its folder after the exit
                     g_running[i] = r; changed = true;
                 }
             }

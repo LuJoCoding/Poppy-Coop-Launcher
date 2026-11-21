@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.5.7.zip`](Upload%20to%20GitHub%20-%201.5.7/PoppyCoop_Launcher_1.5.7.zip)**
-(folder `Upload to GitHub - 1.5.7`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.5.8.zip`](Upload%20to%20GitHub%20-%201.5.8/PoppyCoop_Launcher_1.5.8.zip)**
+(folder `Upload to GitHub - 1.5.8`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,10 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.5.8
+- **New: Logs page** for every chapter (button next to *Settings*). It lists your last game sessions with date, length, mod version and error count. Sessions that ended in a crash are red and show the crash message. One click copies a short report for Discord, or makes `PoppyCoop_report.zip` with the log, the crash report and the network logs. The launcher keeps the last 15 sessions per chapter, so a crash log isn't lost any more when you start the game again.
+- **Chapter 2 is out of beta.**
 
 ### 1.5.7
 - **Fixed: doors, levers, items and checkpoints stopped syncing after a while** (both chapters). After a short connection hiccup the game sent its whole world state at once and the network helper threw it away. Messages are now bundled and sent in portions.

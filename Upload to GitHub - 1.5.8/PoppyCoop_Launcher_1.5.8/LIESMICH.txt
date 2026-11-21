@@ -17,7 +17,7 @@ Neu gegenüber dem Original:
   Freundes / ein anderes Relay eintragen. Alle, die zusammen spielen, müssen denselben Server wählen.
 - Eine EXE für Windows und Linux (Steam/Proton). Name, Farbe, Codes und Spielordner aus dem alten
   Launcher werden übernommen.
-- Chapter 2 ist im Launcher spielbar (Beta).
+- Chapter 2 ist im Launcher voll spielbar.
 - Echte Spielerfiguren in Chapter 2: Ganzkörperfigur mit GrabPack (Rucksack, Werfer, Hände),
   Animationen für Stehen, Gehen, Rennen, Ducken, Springen; abgeschossene Hände fliegen mit
   schwarzem Kabel dorthin, wo der Mitspieler hinschießt; grüne Hand ist an der Figur grün.
