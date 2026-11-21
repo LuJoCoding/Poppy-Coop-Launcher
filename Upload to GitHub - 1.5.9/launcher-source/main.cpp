@@ -4,6 +4,7 @@
 #include "friends.h"
 #include "friends_net.h"
 #include "logs.h"
+#include "zipwrite.h"
 #include <windowsx.h>
 #include <shobjidl.h>
 #include <functional>
@@ -134,6 +135,9 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Set up  \x203A", L"Einrichten  \x203A" },
         { L"Settings", L"Einstellungen" },
         { L"Logs", L"Logs" },
+        { L"WHAT'S NEW", L"WAS IST NEU" },
+        { L"All releases on GitHub", L"Alle Versionen auf GitHub" },
+        { L"PoppyCoop_report.zip is in the launcher folder - send it to us.", L"PoppyCoop_report.zip liegt im Launcher-Ordner - schick sie uns." },
         { L"Logs & crashes", L"Logs & Abstürze" },
         { L"Running now", L"Läuft gerade" },
         { L"game crashed", L"Spiel abgestürzt" },
@@ -357,24 +361,38 @@ static std::wstring tr(const std::wstring& en) {
     return it == m.end() ? en : it->second;
 }
 
-static const wchar_t* WHATS_NEW =
-    L"- New: Logs page for every chapter (button next to Settings). It lists your last game sessions with time,\n"
-    L"  length and errors; crashed ones are red with the crash message. Copy for Discord or make a report zip.\n"
-    L"- Chapter 2 is out of beta.\n"
-    L"\n"
-    L"From 1.5.7: doors, levers, items and checkpoints keep syncing after connection hiccups, no more crashes\n"
-    L"after respawn / Load Game, Chapter 1 shares checkpoints, keys and doors, Speedrun mode, automatic updates.";
-static const wchar_t* WHATS_NEW_DE =
-    L"- Neu: Logs-Seite für jedes Kapitel (Knopf neben Einstellungen). Sie zeigt deine letzten Spielsitzungen mit Zeit,\n"
-    L"  Dauer und Fehlern; abgestürzte sind rot mit der Absturzmeldung. Für Discord kopieren oder Bericht-Zip erstellen.\n"
-    L"- Kapitel 2 ist keine Beta mehr.\n"
-    L"\n"
-    L"Aus 1.5.7: Türen, Hebel, Gegenstände und Checkpoints bleiben nach Verbindungsaussetzern synchron, keine Abstürze\n"
-    L"mehr nach Respawn / Spiel laden, Kapitel 1 teilt Checkpoints, Schlüssel und Türen, Speedrun-Modus, Auto-Updates.";
+// "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
+struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
+static const NewsItem NEWS[] = {
+    { false, L"Linux & Steam Deck: AppImage",
+      L"PoppyCoop_Launcher.AppImage is on GitHub now. Make it executable and double-click it - it finds Steam and Proton by itself.",
+      L"Linux & Steam Deck: AppImage",
+      L"Auf GitHub gibt es jetzt PoppyCoop_Launcher.AppImage. Ausführbar machen, doppelklicken - sie findet Steam und Proton selbst." },
+    { false, L"Proper window bar on Linux",
+      L"Under Proton the launcher draws its own dark title bar instead of the old Windows 95 one: drag to move, double-click to maximize, resize at the edges.",
+      L"Richtige Fensterleiste unter Linux",
+      L"Unter Proton zeichnet der Launcher seine eigene dunkle Titelleiste statt der alten Windows-95-Leiste: ziehen zum Verschieben, Doppelklick zum Maximieren, Ränder zum Vergrößern." },
+    { false, L"Report zip works on Linux",
+      L"\"Report zip\" on the Logs page works everywhere now - under Wine / Proton it didn't. On Linux the zip is saved in the launcher folder.",
+      L"Bericht-Zip geht unter Linux",
+      L"\"Bericht-Zip\" auf der Logs-Seite geht jetzt überall - unter Wine / Proton ging es nicht. Unter Linux landet die Zip im Launcher-Ordner." },
+    { false, L"This page",
+      L"What's new is a real page in the launcher now instead of a message box.",
+      L"Diese Seite",
+      L"Was ist neu ist jetzt eine richtige Seite im Launcher statt einem Meldungsfenster." },
+    { true, L"1.5.8: Logs page",
+      L"Every chapter has a Logs page (next to Settings): your last sessions with time, length and errors, crashed ones in red. Chapter 2 is out of beta.",
+      L"1.5.8: Logs-Seite",
+      L"Jedes Kapitel hat eine Logs-Seite (neben Einstellungen): deine letzten Sitzungen mit Zeit, Dauer und Fehlern, abgestürzte in Rot. Kapitel 2 ist keine Beta mehr." },
+    { true, L"1.5.7: sync fixes",
+      L"Doors, levers, items and checkpoints keep syncing after connection hiccups, no crashes after respawn / Load Game, Chapter 1 shares checkpoints, keys and doors, Speedrun mode, automatic updates.",
+      L"1.5.7: Sync-Fixes",
+      L"Türen, Hebel, Gegenstände und Checkpoints bleiben nach Verbindungsaussetzern synchron, keine Abstürze nach Respawn / Spiel laden, Kapitel 1 teilt Checkpoints, Schlüssel und Türen, Speedrun-Modus, Auto-Updates." },
+};
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
 
 // ------------------------------------------------------------------ state
-enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends, Logs };
+enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends, Logs, News };
 
 static HWND g_wnd;
 static Profile g_prof;
@@ -391,6 +409,7 @@ static bool g_launch_after_install = false;
 static int g_starting_ch = -1;               // waiting for the game process to appear
 static ULONGLONG g_starting_t0 = 0;
 static bool g_running[8] = {};
+static Page g_news_back = Page::Chapter;      // page to go back to from the news page
 static std::vector<LogEntry> g_logs;         // Logs page: sessions + crashes of the selected chapter (read when opened)
 static int g_log_sel = 0;
 static int g_capture = -1;                   // key row waiting for a key press (settings page)
@@ -406,6 +425,19 @@ static std::wstring g_new_name, g_new_addr, g_lan;
 static int g_confirm_remove = -1;                       // what the chapter page shows (setup / not found / play...), part of the fade signature
 
 static int S(double v) { return (int)(v * g_s + 0.5); }
+
+// Own title bar: Proton (Steam on Linux / Steam Deck) removes the desktop's window frame from every window and
+// draws an old Windows 95 style caption instead. There the launcher draws its own dark bar (move, double-click
+// to maximize, resize at the edges, minimize / maximize / close). Windows and plain Wine keep the normal frame.
+// launcher.ini [Launcher] OwnTitleBar=1 / 0 forces it on / off.
+static bool g_own_bar = false;
+static const int TITLE_BAR_H = 32, TITLE_BTN_W = 46, RESIZE_EDGE = 6;
+static RECT g_normal_rect = {};      // window rect before maximizing (Proton restores to the minimum size otherwise)
+static int bar_h() { return g_own_bar ? (int)(TITLE_BAR_H * g_dpi + 0.5) : 0; }
+static void adjust_window_rect(RECT& r, DWORD style) {
+    if (g_own_bar) r.bottom += bar_h();
+    else AdjustWindowRect(&r, style, FALSE);
+}
 
 // installed mod version + "setup done" per chapter, cached (paint runs at 60 fps while animating)
 static std::wstring g_iv[8];
@@ -958,14 +990,21 @@ static void ask_crash_consent() {
     ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
 }
 
+// Windows: the desktop. Wine / Proton: the desktop is hidden inside the Wine prefix - the launcher's own folder
+// is where a Linux / Steam Deck player finds the zip.
+static bool running_on_wine() { return GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr; }
+static std::wstring report_zip_folder() {
+    wchar_t p[MAX_PATH];
+    if (!running_on_wine() && SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, p))) return p;
+    DWORD n = GetModuleFileNameW(nullptr, p, MAX_PATH);
+    std::wstring exe(p, n);
+    return exe.substr(0, exe.find_last_of(L"\\"));
+}
 static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log, const std::wstring& crash_dir = L"") {
-    wchar_t tmp[MAX_PATH], sys[MAX_PATH], desk[MAX_PATH];
-    if (!GetTempPathW(MAX_PATH, tmp) || !GetSystemDirectoryW(sys, MAX_PATH)) return L"";
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, desk))) return L"";
-    std::wstring tar = std::wstring(sys) + L"\\tar.exe";
-    if (GetFileAttributesW(tar.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+    wchar_t tmp[MAX_PATH];
+    if (!GetTempPathW(MAX_PATH, tmp)) return L"";
     std::wstring dir = std::wstring(tmp) + L"PoppyCoopReport";
-    run_wait(L"cmd.exe /c rmdir /s /q \"" + dir + L"\"", 15000);
+    delete_tree(dir);
     CreateDirectoryW(dir.c_str(), nullptr);
     CopyFileW(log.c_str(), (dir + L"\\UE4SS.log").c_str(), FALSE);
     CopyFileW((bin_dir(ch) + L"\\ue4ss\\UE4SS_previous.log").c_str(), (dir + L"\\UE4SS_previous.log").c_str(), FALSE);
@@ -985,10 +1024,10 @@ static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log, 
     for (wchar_t c : info) u8 += c < 128 ? (char)c : '?';
     HANDLE f = CreateFileW((dir + L"\\system.txt").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
     if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, u8.data(), (DWORD)u8.size(), &w, nullptr); CloseHandle(f); }
-    std::wstring zip = std::wstring(desk) + L"\\PoppyCoop_report.zip";
-    DeleteFileW(zip.c_str());
-    if (!run_wait(L"\"" + tar + L"\" -a -c -f \"" + zip + L"\" -C \"" + dir + L"\" .", 30000)) return L"";
-    return GetFileAttributesW(zip.c_str()) == INVALID_FILE_ATTRIBUTES ? L"" : zip;
+    std::wstring zip = report_zip_folder() + L"\\PoppyCoop_report.zip";
+    bool ok = zip_folder(dir, zip);
+    delete_tree(dir);
+    return ok ? zip : L"";
 }
 
 // ------------------------------------------------------------------ chapter page parts
@@ -1506,7 +1545,7 @@ static void draw_logs(int h) {
         std::wstring zip = make_report_zip(g_ch[idx], log, ent.crash_dir);
         if (zip.empty()) { toast(tr(L"Couldn't make the zip - use Copy for Discord or Open folder.")); return; }
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + zip + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
-        toast(tr(L"PoppyCoop_report.zip is on your desktop - send it to us."));
+        toast(running_on_wine() ? tr(L"PoppyCoop_report.zip is in the launcher folder - send it to us.") : tr(L"PoppyCoop_report.zip is on your desktop - send it to us."));
     });
     button(PX + 18, by + 40, bw, 32, tr(L"Open log"), Btn::Ghost, [ent] {
         if (ent.path.empty()) { toast(tr(L"This crash has no log any more.")); return; }
@@ -1516,6 +1555,28 @@ static void draw_logs(int h) {
         std::wstring f = ent.path.empty() ? ent.crash_dir : ent.path;
         ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + f + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
     });
+}
+
+// ------------------------------------------------------------------ what's new page
+static void draw_news(int h) {
+    button(MX, 26, 96, 32, tr(L"\x2039  Back"), Btn::Ghost, [] { g_page = g_news_back; });
+    text(R(MX + 112, 22, MW - 112, 18), tr(L"WHAT'S NEW"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX + 112, 38, MW - 360, 30), L"PoppyCoop v" MOD_VERSION, F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    const bool de = g_lang == 1;
+    const int n = (int)(sizeof(NEWS) / sizeof(NEWS[0]));
+    const int top = 84, bottom = h - 50, gap = 8;
+    const int ch = std::max(58, std::min(90, (bottom - top) / n - gap));     // card height from the room there is
+    int y = top;
+    for (int i = 0; i < n && y + ch <= bottom; i++) {
+        const NewsItem& it = NEWS[i];
+        RECT r = R(MX, y, MW, ch);
+        fill(r, it.old ? mix(C_BG, C_CARD, 0.55) : C_CARD, 12);
+        if (!it.old) fill(R(MX, y + 12, 4, ch - 24), accent(), 2);
+        text(R(MX + 22, y + 10, MW - 44, 20), de ? it.title_de : it.title, F_BOLD, it.old ? C_DIM : C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(MX + 22, y + 32, MW - 44, ch - 38), de ? it.text_de : it.text, F_SMALL, C_DIM, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+        y += ch + gap;
+    }
+    button(MX + MW - 230, 30, 230, 32, tr(L"All releases on GitHub"), Btn::Ghost, [] { ShellExecuteW(nullptr, L"open", RELEASES_PAGE, nullptr, nullptr, SW_SHOWNORMAL); });
 }
 
 // ------------------------------------------------------------------ profile page
@@ -2035,6 +2096,41 @@ static void save_window_size() {
     ini_set(L"Launcher", L"WinH", std::to_wstring((int)((r.bottom - r.top) / g_dpi)));
     ini_set(L"Launcher", L"WinMax", IsZoomed(g_wnd) ? L"1" : L"0");
 }
+static void draw_title_bar(int w, int tb) {
+    RECT bar = { 0, -tb, w, 0 };
+    fill(bar, C_SIDE);
+    int is = (int)(16 * g_dpi + 0.5);
+    DrawIconEx(g_dc, (int)(10 * g_dpi), -tb + (tb - is) / 2, LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1)), is, is, 0, nullptr, DI_NORMAL);
+    bool active = GetForegroundWindow() == g_wnd;
+    RECT tr_ = { (int)(34 * g_dpi), -tb, w - 3 * (int)(TITLE_BTN_W * g_dpi), 0 };
+    text(tr_, L"Poppy Playtime Co-op", F_SMALL, active ? C_TEXT : C_DIM, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const int bw = (int)(TITLE_BTN_W * g_dpi + 0.5), g = (int)(5 * g_dpi + 0.5);
+    for (int i = 0; i < 3; i++) {                  // 0 minimize, 1 maximize / restore, 2 close
+        RECT r = { w - (3 - i) * bw, -tb, w - (2 - i) * bw, 0 };
+        bool hv = hover(r);
+        if (hv) fill(r, i == 2 ? RGB(196, 43, 28) : C_CARD2);
+        COLORREF c = hv && i == 2 ? RGB(255, 255, 255) : active ? C_TEXT : C_DIM;
+        int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        HPEN pen = CreatePen(PS_SOLID, std::max(1, (int)(g_dpi + 0.5)), c);
+        HGDIOBJ op = SelectObject(g_dc, pen), ob = SelectObject(g_dc, GetStockObject(NULL_BRUSH));
+        if (i == 0) { MoveToEx(g_dc, cx - g, cy, nullptr); LineTo(g_dc, cx + g + 1, cy); }
+        else if (i == 1 && !IsZoomed(g_wnd)) Rectangle(g_dc, cx - g, cy - g, cx + g + 1, cy + g + 1);
+        else if (i == 1) {
+            Rectangle(g_dc, cx - g, cy - g + 2, cx + g - 1, cy + g + 1);
+            MoveToEx(g_dc, cx - g + 2, cy - g + 2, nullptr); LineTo(g_dc, cx - g + 2, cy - g); LineTo(g_dc, cx + g, cy - g); LineTo(g_dc, cx + g, cy + g - 2); LineTo(g_dc, cx + g - 2, cy + g - 2);
+        } else {
+            MoveToEx(g_dc, cx - g, cy - g, nullptr); LineTo(g_dc, cx + g + 1, cy + g + 1);
+            MoveToEx(g_dc, cx + g, cy - g, nullptr); LineTo(g_dc, cx - g - 1, cy + g + 1);
+        }
+        SelectObject(g_dc, op); SelectObject(g_dc, ob); DeleteObject(pen);
+        g_hits.push_back({ r, [i] {
+            if (i == 0) PostMessageW(g_wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+            else if (i == 1) PostMessageW(g_wnd, WM_SYSCOMMAND, IsZoomed(g_wnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
+            else PostMessageW(g_wnd, WM_CLOSE, 0, 0);
+        }, false });
+    }
+}
+
 static void paint(HDC wdc, int w, int h) {
     ULONGLONG now = GetTickCount64();
     g_dt = g_frame_ms ? std::min(0.05, (now - g_frame_ms) / 1000.0) : 0.0;
@@ -2047,10 +2143,12 @@ static void paint(HDC wdc, int w, int h) {
     g_dc = dc;
     SetBkMode(dc, TRANSPARENT);
     g_hits.clear();
-    RECT all = { 0, 0, w, h };
+    const int tb = bar_h();
+    SetViewportOrgEx(dc, 0, tb, nullptr);          // the pages draw below the own title bar (it sits at y -tb..0)
+    RECT all = { 0, -tb, w, h };
     fill(all, C_BG);
-    update_zoom(w, h);
-    int lh = (int)(h / g_s);
+    update_zoom(w, h - tb);
+    int lh = (int)((h - tb) / g_s);
     MW = std::max(636, (int)(w / g_s) - MX - 32);
     draw_sidebar(lh);
     g_view = 0;
@@ -2061,6 +2159,7 @@ static void paint(HDC wdc, int w, int h) {
     else if (g_page == Page::Servers) draw_servers(lh);
     else if (g_page == Page::Friends) draw_friends(lh);
     else if (g_page == Page::Logs && playable(cur())) draw_logs(lh);
+    else if (g_page == Page::News) draw_news(lh);
     else draw_chapter(lh);
 
     // toast: fades and slides in, fades out
@@ -2087,8 +2186,12 @@ static void paint(HDC wdc, int w, int h) {
         });
     else
         button(MX + MW - 130, lh - 34, 130, 28, tr(L"What's new"), Btn::Ghost, [] {
-            MessageBoxW(g_wnd, g_lang == 1 ? WHATS_NEW_DE : WHATS_NEW, g_lang == 1 ? L"PoppyCoop " MOD_VERSION L" - was ist neu" : L"PoppyCoop " MOD_VERSION L" - what's new", MB_OK | MB_ICONINFORMATION);
+            if (g_page != Page::News) g_news_back = g_page;
+            g_page = Page::News; g_focus = {}; g_capture = -1;
         });
+
+    if (tb) draw_title_bar(w, tb);
+    SetViewportOrgEx(dc, 0, 0, nullptr);
 
     // cross-fade
     long long sig = theme_index() * 100000LL + (long long)g_page * 1000 + g_sel * 10 + g_view;
@@ -2280,9 +2383,51 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_ERASEBKGND: return 1;
+    case WM_SYSCOMMAND:
+        if (g_own_bar) {
+            UINT sc = (UINT)(wp & 0xFFF0);
+            if (sc == SC_MAXIMIZE && !IsZoomed(h)) GetWindowRect(h, &g_normal_rect);
+            if (sc == SC_RESTORE && IsZoomed(h) && g_normal_rect.right > g_normal_rect.left) {
+                ShowWindow(h, SW_RESTORE);
+                RECT n = g_normal_rect;
+                SetWindowPos(h, nullptr, n.left, n.top, n.right - n.left, n.bottom - n.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                return 0;
+            }
+        }
+        break;
+    case WM_NCCALCSIZE:
+        if (g_own_bar && wp) return 0;             // the whole window is client area - no Wine caption
+        break;
+    case WM_NCPAINT:
+        if (g_own_bar) return 0;
+        break;
+    case WM_NCACTIVATE:
+        if (g_own_bar) { InvalidateRect(h, nullptr, FALSE); return TRUE; }
+        break;
+    case WM_NCHITTEST:
+        if (g_own_bar) {
+            POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            ScreenToClient(h, &p);
+            RECT rc; GetClientRect(h, &rc);
+            const int e = (int)(RESIZE_EDGE * g_dpi + 0.5), tb = bar_h();
+            if (!IsZoomed(h)) {
+                bool l = p.x < e, r = p.x >= rc.right - e, t = p.y < e, b = p.y >= rc.bottom - e;
+                if (t && l) return HTTOPLEFT;
+                if (t && r) return HTTOPRIGHT;
+                if (b && l) return HTBOTTOMLEFT;
+                if (b && r) return HTBOTTOMRIGHT;
+                if (l) return HTLEFT;
+                if (r) return HTRIGHT;
+                if (t) return HTTOP;
+                if (b) return HTBOTTOM;
+            }
+            if (p.y < tb && p.x < rc.right - 3 * (int)(TITLE_BTN_W * g_dpi + 0.5)) return HTCAPTION;
+            return HTCLIENT;
+        }
+        break;
     case WM_GETMINMAXINFO: {
         RECT r = { 0, 0, (int)(MIN_W * g_dpi + 0.5), (int)(MIN_H * g_dpi + 0.5) };
-        AdjustWindowRect(&r, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
+        adjust_window_rect(r, (DWORD)GetWindowLongW(h, GWL_STYLE));
         auto* mm = (MINMAXINFO*)lp;
         mm->ptMinTrackSize = { r.right - r.left, r.bottom - r.top };
         return 0;
@@ -2301,13 +2446,13 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             KillTimer(h, TIMER_MINSIZE); return 0;
         }
         RECT r = { 0, 0, std::max((int)cr.right, (int)(MIN_W * g_dpi + 0.5)), std::max((int)cr.bottom, (int)(MIN_H * g_dpi + 0.5)) };
-        AdjustWindowRect(&r, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
+        adjust_window_rect(r, (DWORD)GetWindowLongW(h, GWL_STYLE));
         SetWindowPos(h, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
     case WM_EXITSIZEMOVE: save_window_size(); return 0;
     case WM_MOUSEMOVE: {
-        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
         TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         InvalidateRect(h, nullptr, FALSE);
         return 0;
@@ -2315,12 +2460,12 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_MOUSELEAVE: g_mouse = { -1, -1 }; InvalidateRect(h, nullptr, FALSE); return 0;
     case WM_SETCURSOR:
         if (LOWORD(lp) == HTCLIENT) {
-            for (auto& hit : g_hits) if (hover(hit.r)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
+            for (auto& hit : g_hits) if (hit.hand && hover(hit.r)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
             SetCursor(LoadCursor(nullptr, IDC_ARROW)); return TRUE;
         }
         break;
     case WM_LBUTTONDOWN: {
-        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
         g_pressed = -1;
         for (int i = (int)g_hits.size() - 1; i >= 0; i--) if (hover(g_hits[i].r)) { g_pressed = i; break; }
         if (g_pressed < 0) { g_focus = {}; g_capture = -1; }
@@ -2330,7 +2475,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP: {
         ReleaseCapture();
-        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
         if (g_pressed >= 0 && g_pressed < (int)g_hits.size() && hover(g_hits[g_pressed].r)) {
             auto fn = g_hits[g_pressed].fn;   // copy: the handler may change the page
             fn();
@@ -2678,15 +2823,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     wc.hIconSm = wc.hIcon;
     wc.lpszClassName = L"PoppyCoopLauncher3";
     RegisterClassExW(&wc);
+    {   // own title bar under Proton (see g_own_bar)
+        std::wstring ob = ini_get(L"Launcher", L"OwnTitleBar", L"");
+        wchar_t ev[8];
+        bool proton = GetEnvironmentVariableW(L"STEAM_COMPAT_PROTON", ev, 8) > 0 || GetEnvironmentVariableW(L"STEAM_COMPAT_DATA_PATH", nullptr, 0) > 0;
+        g_own_bar = ob == L"1" || (ob != L"0" && running_on_wine() && proton);
+    }
     DWORD style = WS_OVERLAPPEDWINDOW;             // resizable + maximize; size is remembered
     RECT work; SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
     int ww = _wtoi(ini_get(L"Launcher", L"WinW", L"0").c_str()), wh = _wtoi(ini_get(L"Launcher", L"WinH", L"0").c_str());
     RECT r = { 0, 0, S(BASE_W), S(BASE_H) };
-    AdjustWindowRect(&r, style, FALSE);
+    adjust_window_rect(r, style);
     if (ww <= 0 || wh <= 0) { ww = (int)((r.right - r.left) / g_dpi); wh = (int)((r.bottom - r.top) / g_dpi); }   // first start: 1180x780 inside
     ww = std::min((int)(ww * g_dpi), (int)(work.right - work.left)); wh = std::min((int)(wh * g_dpi), (int)(work.bottom - work.top));
     g_wnd = CreateWindowExW(0, wc.lpszClassName, L"Poppy Playtime Co-op", style, CW_USEDEFAULT, CW_USEDEFAULT,
                             ww, wh, nullptr, nullptr, inst, nullptr);
+    if (g_own_bar) SetWindowPos(g_wnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     if (ini_get(L"Launcher", L"WinMax", L"0") == L"1" && show != SW_SHOWMINIMIZED && show != SW_SHOWMINNOACTIVE) show = SW_SHOWMAXIMIZED;
     // dark title bar (Windows 10 20H1+ / 11); ignored elsewhere
     if (HMODULE dwm = LoadLibraryW(L"dwmapi.dll")) {

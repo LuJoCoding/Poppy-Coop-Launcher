@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.5.8.zip`](Upload%20to%20GitHub%20-%201.5.8/PoppyCoop_Launcher_1.5.8.zip)**
-(folder `Upload to GitHub - 1.5.8`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.5.9.zip`](Upload%20to%20GitHub%20-%201.5.9/PoppyCoop_Launcher_1.5.9.zip)**
+(folder `Upload to GitHub - 1.5.9`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,12 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.5.9
+- **Linux & Steam Deck: AppImage.** Download `PoppyCoop_Launcher.AppImage`, make it executable and double-click it. It finds Steam and Proton by itself and runs the launcher like a normal app. Games start exactly like from Steam.
+- **Proper window bar on Linux:** under Proton the launcher now draws its own dark title bar instead of the old Windows 95 one (drag to move, double-click to maximize, resize at the edges).
+- **Fixed: "Report zip" on the Logs page didn't work on Linux / Steam Deck.** It works everywhere now; on Linux the zip is saved in the launcher folder.
+- **What's new** is a real page in the launcher now instead of a message box.
 
 ### 1.5.8
 - **New: Logs page** for every chapter (button next to *Settings*). It lists your last game sessions with date, length, mod version and error count. Sessions that ended in a crash are red and show the crash message. One click copies a short report for Discord, or makes `PoppyCoop_report.zip` with the log, the crash report and the network logs. The launcher keeps the last 15 sessions per chapter, so a crash log isn't lost any more when you start the game again.

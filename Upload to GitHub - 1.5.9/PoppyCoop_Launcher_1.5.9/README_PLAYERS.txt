@@ -1,4 +1,4 @@
-POPPY PLAYTIME CO-OP - LAUNCHER 1.5.5 (Chapter 1 + 2, Chapter 3-5 experimental)
+POPPY PLAYTIME CO-OP - LAUNCHER 1.5.9 (Chapter 1 + 2, Chapter 3-5 experimental)
 =====================================================
 
 Unofficial PoppyCoop Launcher 3.0 (fan mod, not by Mob Entertainment).
@@ -14,6 +14,8 @@ New compared to the original:
 - Server card (bottom left): pick the server and see how good the connection is (signal bars, ping, jitter,
   loss). Besides the free PoppyCoop relay you can host on your own PC or add a friend's IP / another relay.
   Everyone you play with has to pick the same server.
+- Linux / Steam Deck: PoppyCoop_Launcher.AppImage (from the GitHub release) - make it executable and
+  double-click it; it runs the launcher through Steam's Proton by itself.
 - One exe for Windows and Linux (Steam/Proton). Name, colour, codes and game folders from the old
   launcher are kept.
 - Chapter 2 is fully playable in the launcher.
