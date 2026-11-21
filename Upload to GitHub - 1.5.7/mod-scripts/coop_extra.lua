@@ -208,6 +208,17 @@ function UI.build()
     UI.input = UI.new("EditableTextBox")
     pcall(function() UI.input:SetHintText(FText("Type a message...")) end)
     if P.CHAPTER == 2 then pcall(function() UI.input.WidgetStyle.Font.Size = 15 end) end   -- in place (UE5 style differs)
+    -- typed text: the default is dark (almost the panel colour) - light, written in place before AddToViewport.
+    -- UE4 (Chapter 2) colours it with ForegroundColor, UE5 (Chapter 1) with TextStyle.ColorAndOpacity.
+    local function light(c) c.R, c.G, c.B, c.A = 0.96, 0.96, 0.96, 1 end
+    local st = UI.input.WidgetStyle
+    if P.CHAPTER == 2 then
+        pcall(function() light(st.ForegroundColor.SpecifiedColor) end)
+    else
+        pcall(function() light(st.TextStyle.ColorAndOpacity.SpecifiedColor) end)
+        pcall(function() light(st.ForegroundColor.SpecifiedColor) end)
+    end
+    pcall(function() local b = st.BackgroundColor.SpecifiedColor; b.R, b.G, b.B, b.A = 0.12, 0.12, 0.15, 1 end)
     local inbox = UI.new("SizeBox")
     pcall(function() inbox:SetWidthOverride(380) end)
     inbox:SetContent(UI.input)
@@ -224,11 +235,23 @@ function UI.build()
     return true
 end
 
+-- forget every widget we made (they belong to a world that is going away); UI.ensure builds new ones
+function UI.drop()
+    UI.widget, UI.canvas, UI.chatpanel, UI.feedbox, UI.input, UI.tree = nil, nil, nil, nil, nil, nil
+    UI.stat, UI.statbox, UI.stat_lines, UI.stat_title = nil, nil, nil, nil
+    UI.rows, UI.world, UI.dirty = {}, nil, true
+    if UI.chat then UI.chat.open = false end
+end
+table.insert(Handlers.unload, function() UI.drop() end)
+
 function UI.ensure()
     if UI.state == "off" then return false end
     local world = UEHelpers.GetWorld()
     local waddr = valid(world) and try(function() return world:GetAddress() end)
-    if UI.widget and valid(UI.widget) and UI.world == waddr and try(function() return UI.widget:IsInViewport() end) then return true end
+    -- the world changed (respawn / Load Game): the old widgets died with it. Never touch them again - even
+    -- IsValid() on a freed widget crashes the game (UE4SS +0x67881f). Compare the world FIRST.
+    if UI.widget and UI.world ~= waddr then UI.drop() end
+    if UI.widget and valid(UI.widget) and try(function() return UI.widget:IsInViewport() end) then return true end
     if not valid(Game.pc) then return false end
     if UI.next_try and now() < UI.next_try then return false end
     UI.next_try = now() + 2
@@ -804,6 +827,50 @@ local function motion_tick(dt)
 end
 -- 3) move remotely-driven actors smoothly toward the latest received transform - from the late queue
 -- (writes to physics bodies happen after the frame's simulation/animation tasks, never inside a tick)
+-- Rotations are blended as quaternions: blending pitch/yaw/roll one by one turned a tumbling prop the long way
+-- round (roll 179 -> -179 went through 0) and Unreal's Euler flips (pitch past 90) made it spin wildly.
+local Q = {}
+function Q.from(p, y, r)            -- Unreal FRotator (degrees) -> quaternion (FRotator::Quaternion)
+    local d = math.pi / 360
+    local sp, cp = math.sin(p * d), math.cos(p * d)
+    local sy, cy = math.sin(y * d), math.cos(y * d)
+    local sr, cr = math.sin(r * d), math.cos(r * d)
+    return { x = cr * sp * sy - sr * cp * cy, y = -cr * sp * cy - sr * cp * sy,
+             z = cr * cp * sy - sr * sp * cy, w = cr * cp * cy + sr * sp * sy }
+end
+function Q.to(q)                    -- quaternion -> FRotator (FQuat::Rotator)
+    local x, y, z, w = q.x, q.y, q.z, q.w
+    local sing = z * x - w * y
+    local yaw = math.deg(math.atan(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+    local pitch, roll
+    if sing < -0.4999995 then
+        pitch = -90; roll = ((-yaw - 2 * math.deg(math.atan(x, w)) + 180) % 360) - 180
+    elseif sing > 0.4999995 then
+        pitch = 90; roll = ((yaw - 2 * math.deg(math.atan(x, w)) + 180) % 360) - 180
+    else
+        pitch = math.deg(math.asin(2 * sing))
+        roll = math.deg(math.atan(-2 * (w * x + y * z), 1 - 2 * (x * x + y * y)))
+    end
+    return pitch, yaw, roll
+end
+function Q.slerp(a, b, t)           -- shortest way
+    local dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+    local bx, by, bz, bw = b.x, b.y, b.z, b.w
+    if dot < 0 then dot = -dot; bx, by, bz, bw = -bx, -by, -bz, -bw end
+    local s0, s1
+    if dot > 0.9995 then s0, s1 = 1 - t, t
+    else
+        local th = math.acos(dot)
+        local sn = math.sin(th)
+        s0, s1 = math.sin((1 - t) * th) / sn, math.sin(t * th) / sn
+    end
+    local q = { x = s0 * a.x + s1 * bx, y = s0 * a.y + s1 * by, z = s0 * a.z + s1 * bz, w = s0 * a.w + s1 * bw }
+    local l = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+    if l > 0 then q.x, q.y, q.z, q.w = q.x / l, q.y / l, q.z / l, q.w / l end
+    return q
+end
+P.Q = Q   -- (tests)
+
 motion_apply = function()
     if Motion.off or not Coop.active() or Game.loading then return end
     local t_now, dt = now(), Motion.dt or 0.016
@@ -816,9 +883,9 @@ motion_apply = function()
                 local c, k = t.cur, math.min(1, dt * 12)
                 local far = math.abs(rm.X - c.X) + math.abs(rm.Y - c.Y) + math.abs(rm.Z - c.Z) > 400
                 if far then k = 1 end
-                local dyw = ((rm.Yw - c.Yw + 540) % 360) - 180
                 local nx = { X = c.X + (rm.X - c.X) * k, Y = c.Y + (rm.Y - c.Y) * k, Z = c.Z + (rm.Z - c.Z) * k }
-                local nr = { Pitch = c.P + (rm.P - c.P) * k, Yaw = c.Yw + dyw * k, Roll = c.R + (rm.R - c.R) * k }
+                local np, nyw, nro = Q.to(Q.slerp(Q.from(c.P, c.Yw, c.R), Q.from(rm.P, rm.Yw, rm.R), k))
+                local nr = { Pitch = np, Yaw = nyw, Roll = nro }
                 t.a:K2_SetActorLocationAndRotation(nx, nr, false, {}, true)
                 t.cur = { X = nx.X, Y = nx.Y, Z = nx.Z, P = nr.Pitch, Yw = nr.Yaw, R = nr.Roll }
             end)

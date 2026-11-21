@@ -518,12 +518,27 @@ local function cp_number(args) return tonumber(tostring(args or ""):match("^n:(%
 -- "Load Game" (and a respawn) puts everyone there. Saving a checkpoint in Chapter 1 only writes the save
 -- slot (no level streaming), so it is safe to do while the player is somewhere else. Forward only.
 local CP1_PENDING = nil
-local function cp1_apply(n)
-    if P.CHAPTER ~= 1 or not SHARE_CP1 or not n or n <= CP_MAX then return end
+local function cp1_apply(n, from)
+    if P.CHAPTER ~= 1 or not SHARE_CP1 or not n then return end
+    if n < CP_MAX and from and Coop.active() then
+        Coop.send_to(from, "cp1", tostring(CP_MAX))      -- they are behind: tell them ours right away
+        return
+    end
+    if n <= CP_MAX then return end
     CP_MAX = n
     CP1_PENDING = n
 end
+local CP1 = { RESEND = 5, sent_at = -100, was_active = false }   -- (this file is at Lua's 200-locals limit: use tables)
 local function cp1_tick()
+    -- a new checkpoint is sent the moment it is saved; on top of that our furthest one goes out right when the
+    -- connection comes up (a save made while loading, before it was up, was lost) and again every 5 s
+    local active = Coop.active()
+    if active and not CP1.was_active then CP1.sent_at = -100 end
+    CP1.was_active = active
+    if P.CHAPTER == 1 and SHARE_CP1 and CP_MAX >= 0 and active and P.game_time() - CP1.sent_at > CP1.RESEND then
+        CP1.sent_at = P.game_time()
+        Coop.send_event("cp1", tostring(CP_MAX))
+    end
     if not CP1_PENDING then return end
     local gm = try(FindFirstOf, "Chapter1_Gamemode_C")
     if not valid(gm) then return end                 -- loading: try again next tick
@@ -534,7 +549,7 @@ local function cp1_tick()
     replaying = replaying - 1
     log("friend's checkpoint %d saved here (Load Game starts there) %s", n, ok and "" or "FAILED")
 end
-Coop.on("cp1", function(from, rest) cp1_apply(tonumber(rest)) end)
+Coop.on("cp1", function(from, rest) cp1_apply(tonumber(rest), from) end)
 table.insert(P.Handlers.join, function(id)
     if P.CHAPTER == 1 and SHARE_CP1 and CP_MAX >= 0 then Coop.send_to(id, "cp1", tostring(CP_MAX)) end
 end)
@@ -1583,6 +1598,9 @@ local function set_slot(n, on)
     pcall(function() s.obj:SetShouldBeLoaded(on) end)
     pcall(function() s.obj:SetShouldBeVisible(on) end)
     s.last_load = on
+    -- we unload a level ourselves: queued class hooks / the level list may hold its objects - drop them now,
+    -- not only when the next level count (1 s later) notices
+    if not on then HookQ = {}; SlotList = nil end
 end
 
 local SyncProf = {}
@@ -1866,6 +1884,7 @@ table.insert(P.Handlers.tick, function(dt, have)
     if AutoFollow and have then pcall(auto_follow_tick) end
     if not have or not pawn() then return end
     local now = P.game_time()
+    pcall(cp1_tick)          -- every frame: a friend's checkpoint is saved here at once (only flag checks otherwise)
     if now - Inv1.t > 0.5 then Inv1.t = now; pcall(inv1_tick) end
     if now - t_follow > 1 then t_follow = now; pcall(check_auto_follow) end
     if now - t_pending > 5 and next(Pending) then t_pending = now; pcall(retry_pending) end   -- e.g. gated controllers once we are near
@@ -1889,7 +1908,7 @@ table.insert(P.Handlers.tick, function(dt, have)
     if now - t_levels > 2 then
         t_levels = now
         local c0 = os.clock()
-        crumb("world: sync_levels"); sync_levels(); crumb("world: cp_fix"); pcall(cp_fix_tick); pcall(cp1_tick)
+        crumb("world: sync_levels"); sync_levels(); crumb("world: cp_fix"); pcall(cp_fix_tick)
         local S = P.Perf and P.Perf.sec
         if S then S.w_levels = (S.w_levels or 0) + os.clock() - c0 end
         if os.clock() - c0 > 0.005 then log("slow: level sync %.1f ms (slots %.1f ms, list age %.0f s)", (os.clock() - c0) * 1000, (SyncProf.scan or 0) * 1000, now - SlotListAt) end

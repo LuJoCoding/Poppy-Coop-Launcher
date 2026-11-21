@@ -1,5 +1,8 @@
 // PoppyCoop Launcher 3 - window and UI (plain GDI, immediate-mode: every paint rebuilds the click areas).
 #include "core.h"
+#include "crashreport.h"
+#include "friends.h"
+#include "friends_net.h"
 #include <windowsx.h>
 #include <shobjidl.h>
 #include <functional>
@@ -8,8 +11,24 @@
 #include <cmath>
 
 // ------------------------------------------------------------------ messages from worker threads
-enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE, WM_APP_UPDATE, WM_APP_SELFUPD, WM_APP_MINSIZE };
+enum { WM_APP_PROGRESS = WM_APP + 1, WM_APP_INSTALLED, WM_APP_PROBE, WM_APP_UPDATE, WM_APP_SELFUPD, WM_APP_MINSIZE, WM_APP_CRASHSENT, WM_APP_FRIENDS };
 static bool g_updating = false;
+static bool g_autoupd = true;      // Launcher settings: "Automatic updates" (ini Launcher AutoUpdate)
+static int g_crashrep = -1;        // Launcher settings: "Send crash reports" (ini CrashReports): -1 not asked yet, 0 no, 1 yes
+static ULONGLONG g_crash_check_at = 0;   // a game ended: look for a new crash report at this tick
+static std::wstring g_friend_edit;       // friends page: name being typed
+static void friends_refresh();
+// friends server (friends_net.h): last list, whether it answers, background call running
+static FriendsResult g_fnet;
+static int g_fnet_state = 0;             // 0 not asked yet, 1 server answers, 2 not reachable / not set up
+static bool g_fnet_busy = false;
+static ULONGLONG g_fnet_hello_at = 0;    // last hello (status heartbeat, every 60 s once friends are used)
+static void friends_net_sync(bool hello);
+static int g_friends_on = -1;             // ini FriendsOn (set when the friends page is opened the first time)
+static bool friends_used() {
+    if (g_friends_on < 0) g_friends_on = ini_get(L"Launcher", L"FriendsOn", L"0") == L"1" ? 1 : 0;
+    return g_friends_on == 1;
+}
 static std::wstring g_latest;      // newest release on GitHub (empty: unknown / offline)
 // ------------------------------------------------------------------ language (English / Deutsch)
 static int g_lang = 0;                    // 0 English, 1 Deutsch (ini [Launcher] Lang)
@@ -172,6 +191,77 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"SOON", L"BALD" },
         { L"LANGUAGE", L"SPRACHE" },
         { L"Speedrun mode", L"Speedrun-Modus" },
+        { L"Automatic updates", L"Automatische Updates" },
+        { L" new", L" neu" },
+        { L" online", L" online" },
+        { L"One moment...", L"Einen Moment..." },
+        { L"No player with that friend code.", L"Kein Spieler mit diesem Freundes-Code." },
+        { L"You are already friends.", L"Ihr seid schon befreundet." },
+        { L"Too many requests - try again later.", L"Zu viele Anfragen - versuch es später nochmal." },
+        { L"Friends server: your account key doesn't match.", L"Freunde-Server: dein Konto-Schlüssel passt nicht." },
+        { L"Friends server error: ", L"Fehler beim Freunde-Server: " },
+        { L"Your friend code is now ", L"Dein Freundes-Code ist jetzt " },
+        { L"You are friends now!", L"Ihr seid jetzt Freunde!" },
+        { L"Friend request sent.", L"Freundschaftsanfrage gesendet." },
+        { L"Request declined.", L"Anfrage abgelehnt." },
+        { L"Removed.", L"Entfernt." },
+        { L"Send a friend request with their friend code. Friends see each other online and can join each other.", L"Schick eine Freundschaftsanfrage mit dem Freundes-Code. Freunde sehen sich online und können sich beitreten." },
+        { L"Send request", L"Anfrage senden" },
+        { L"wants to be your friend", L"möchte dein Freund sein" },
+        { L"Accept", L"Annehmen" },
+        { L"Decline", L"Ablehnen" },
+        { L"No friends yet - send a request with a friend code, or to someone you played with below.", L"Noch keine Freunde - schick eine Anfrage mit einem Freundes-Code oder an jemanden unten, mit dem du gespielt hast." },
+        { L"Offline", L"Offline" },
+        { L"Online", L"Online" },
+        { L"Playing Chapter ", L"Spielt Kapitel " },
+        { L" - room ", L" - Raum " },
+        { L"Join", L"Beitreten" },
+        { L"Waiting for ", L"Warte auf " },
+        { L" to accept", L" (noch nicht angenommen)" },
+        { L"Cancel", L"Zurückziehen" },
+        { L"Nobody new yet - players show up here after you played together.", L"Noch niemand Neues - Spieler erscheinen hier, nachdem ihr zusammen gespielt habt." },
+        { L"Friends server not reachable - showing your local list.", L"Freunde-Server nicht erreichbar - lokale Liste wird angezeigt." },
+        { L"Friends", L"Freunde" },
+        { L"FRIENDS", L"FREUNDE" },
+        { L"Your friends", L"Deine Freunde" },
+        { L"Add the people you play with. Their last room is remembered - join it with one click.", L"Füge die Leute hinzu, mit denen du spielst. Ihr letzter Raum wird gemerkt - mit einem Klick beitreten." },
+        { L"Friend code, e.g. Max#12345", L"Freundes-Code, z.B. Max#12345" },
+        { L"YOUR FRIEND CODE", L"DEIN FREUNDES-CODE" },
+        { L"Copy", L"Kopieren" },
+        { L"Copied: ", L"Kopiert: " },
+        { L"Add friends with their friend code. Their last room is remembered - join it with one click.", L"Füge Freunde mit ihrem Freundes-Code hinzu. Ihr letzter Raum wird gemerkt - mit einem Klick beitreten." },
+        { L"Enter the whole friend code with the number, e.g. Max#12345.", L"Gib den ganzen Freundes-Code mit Nummer ein, z.B. Max#12345." },
+        { L"That's your own friend code.", L"Das ist dein eigener Freundes-Code." },
+        { L"Type your friend's code first (Name#12345).", L"Gib zuerst den Code deines Freundes ein (Name#12345)." },
+        { L"No friends yet - add a friend code above, or pick someone you played with below.", L"Noch keine Freunde - oben einen Freundes-Code eintragen oder unten jemanden auswählen, mit dem du gespielt hast." },
+        { L"Players with an older version show without a number. Online status and invites come later.", L"Spieler mit älterer Version erscheinen ohne Nummer. Online-Status und Einladungen kommen später." },
+        { L"Add", L"Hinzufügen" },
+        { L"Type your friend's player name first.", L"Gib zuerst den Spielernamen deines Freundes ein." },
+        { L" is now your friend.", L" ist jetzt dein Freund." },
+        { L" is already your friend.", L" ist schon dein Freund." },
+        { L"The friend list is full.", L"Die Freundesliste ist voll." },
+        { L"No friends yet - add a name above, or pick someone you played with below.", L"Noch keine Freunde - oben einen Namen eintragen oder unten jemanden auswählen, mit dem du gespielt hast." },
+        { L"Not played together yet", L"Noch nicht zusammen gespielt" },
+        { L"Last room: ", L"Letzter Raum: " },
+        { L"Join their room", L"Raum beitreten" },
+        { L"Remove", L"Entfernen" },
+        { L" removed.", L" entfernt." },
+        { L" more (make the window bigger)", L" weitere (Fenster größer ziehen)" },
+        { L"RECENTLY PLAYED WITH", L"ZULETZT GESPIELT MIT" },
+        { L"Nobody new yet - names show up here after you played together.", L"Noch niemand Neues - Namen erscheinen hier, nachdem ihr zusammen gespielt habt." },
+        { L"Online status and invites are coming later (they need a server).", L"Online-Status und Einladungen kommen später (dafür braucht es einen Server)." },
+        { L"Room code of ", L"Raum-Code von " },
+        { L" - press PLAY to join.", L" - drücke SPIELEN zum Beitreten." },
+        { L"Send crash reports", L"Absturzberichte senden" },
+        { L"After a crash, send the error and the mod log to the developers (no user names).", L"Nach einem Absturz Fehler und Mod-Log an die Entwickler senden (ohne Benutzernamen)." },
+        { L"Crash reports", L"Absturzberichte" },
+        { L"When the game crashes, may the launcher send a crash report to the PoppyCoop developers?\n\nIt contains the error message, the end of the mod's log, the mod version and your Windows version - user names in folder paths are removed. It helps us fix crashes.\n\nYou can change this any time in the launcher settings.",
+          L"Darf der Launcher nach einem Absturz einen Bericht an die PoppyCoop-Entwickler schicken?\n\nEr enthält die Fehlermeldung, das Ende des Mod-Logs, die Mod-Version und deine Windows-Version - Benutzernamen in Ordnerpfaden werden entfernt. Das hilft uns, Abstürze zu beheben.\n\nDu kannst das jederzeit in den Launcher-Einstellungen ändern." },
+        { L"The game crashed - a crash report was sent to the developers. Thanks!", L"Das Spiel ist abgestürzt - ein Absturzbericht wurde an die Entwickler geschickt. Danke!" },
+        { L"The game crashed - sending the crash report failed. \"Report a problem\" makes a zip for us.", L"Das Spiel ist abgestürzt - der Bericht konnte nicht gesendet werden. \"Problem melden\" macht ein Zip für uns." },
+        { L"Install a new version by itself when the launcher starts.", L"Neue Version beim Start des Launchers selbst installieren." },
+        { L"Updating to v", L"Aktualisiere auf v" },
+        { L"Updated to v", L"Aktualisiert auf v" },
         { L"Speedrun mode on: only doors, inventory and hands are shared.", L"Speedrun-Modus an: nur Türen, Inventar und Hände werden geteilt." },
         { L"Speedrun mode off: default settings.", L"Speedrun-Modus aus: Standard-Einstellungen." },
         { L"Only what a run needs (doors, inventory, hands), max fps", L"Nur was ein Run braucht (Türen, Inventar, Hände), max. fps" },
@@ -244,37 +334,31 @@ static std::wstring tr(const std::wstring& en) {
 }
 
 static const wchar_t* WHATS_NEW =
-    L"- Experimental Chapters 3-5 (Launcher settings): see each other, teleport, ping and chat. No door/puzzle/item sync yet.\n"
-    L"- Several games at once (Launcher settings) for Nucleus Co-op / split screen: PLAY starts another window, each with its own name and colour.\n"
-    L"- Command line: PoppyCoopLauncher.exe --play --chapter N starts a game right away (for Nucleus handlers).\n"
-    L"- Keys apply to every chapter. The status key is now F11 (F10 opens the game console).\n"
-    L"- New message boxes at the left edge, status panel on F11 (with deaths and split times).\n"
-    L"- Y opens the chat menu: 1-8 quick messages or type a text + Enter. /help lists chat commands\n"
-    L"  (/tp, /stats, /report, /solid, /footsteps, /follow, /respawn, /spectate, /grabfriend, /fps60).\n"
-    L"- Friends are solid, their red hand is no longer mirrored, quick messages make them nod or cheer.\n"
-    L"- Chapter 2: shoot your hand at a friend to pull yourself to them.\n"
-    L"- When you die, the camera watches a friend until you respawn.\n"
-    L"- Friends see when you watch a cutscene. A tape in the VHS recorder plays for everyone standing there.\n"
-    L"- New switches: Performance mode, Harder enemies.\n"
-    L"- Launcher: updates itself, figure preview, 'Played with' names, problem report zip on the desktop.";
+    L"- Fixed: doors, levers, items and checkpoints stopped syncing after a while. After a short connection hiccup\n"
+    L"  the whole world state was sent at once and got lost - messages are now bundled and sent in portions.\n"
+    L"- Fixed: crashes after respawning / Load Game (the message boxes of the old world were still used).\n"
+    L"- Chapter 1: checkpoints are shared again - Load Game and respawns put you at the furthest one (sent at once).\n"
+    L"- Chapter 1: keys and doors are shared; joining later gets everything done before, also after a crash.\n"
+    L"- Pullable objects no longer spin wildly on the other screen.\n"
+    L"- Speedrun mode (Chapter 1 settings): only what a run needs is shared, best fps.\n"
+    L"- The launcher updates itself when it starts (Launcher settings: Automatic updates).\n"
+    L"- The last game log is kept (UE4SS_previous.log); Report a problem adds it and the game's crash report.\n"
+    L"- Chat: the text you type is readable. The window can be resized.";
 static const wchar_t* WHATS_NEW_DE =
-    L"- Experimentelle Kapitel 3-5 (Launcher-Einstellungen): ihr seht euch, Teleport, Markieren und Chat. Türen/Rätsel/Gegenstände noch nicht geteilt.\n"
-    L"- Mehrere Spiele gleichzeitig (Launcher-Einstellungen) für Nucleus Co-op / Splitscreen: jedes Fenster mit eigenem Namen und eigener Farbe.\n"
-    L"- Kommandozeile: PoppyCoopLauncher.exe --play --chapter N startet sofort ein Spiel (für Nucleus-Handler).\n"
-    L"- Tasten gelten für alle Kapitel. Status ist jetzt F11 (F10 öffnet die Spielkonsole).\n"
-    L"- Neue Nachrichten-Boxen am linken Rand, Status-Fenster auf F11 (mit Toden und Split-Zeiten).\n"
-    L"- Y öffnet das Chat-Menü: 1-8 Schnellnachrichten oder Text tippen + Enter. /help zeigt die Chat-Befehle\n"
-    L"  (/tp, /stats, /report, /solid, /footsteps, /follow, /respawn, /spectate, /grabfriend, /fps60).\n"
-    L"- Freunde sind fest, ihre rote Hand ist nicht mehr gespiegelt, bei Schnellnachrichten nicken oder jubeln sie.\n"
-    L"- Kapitel 2: Schieß deine Hand auf einen Freund, um dich zu ihm zu ziehen.\n"
-    L"- Wenn du stirbst, schaut die Kamera bis zum Respawn einem Freund zu.\n"
-    L"- Freunde sehen, wenn du eine Cutscene schaust. Eine Kassette im VHS-Rekorder läuft für alle, die dort stehen.\n"
-    L"- Neue Schalter: Leistungsmodus, Stärkere Gegner.\n"
-    L"- Launcher: aktualisiert sich selbst, Figur-Vorschau, 'Gespielt mit'-Namen, Problem-Bericht als Zip auf dem Desktop.";
+    L"- Behoben: Türen, Hebel, Gegenstände und Checkpoints wurden nach einer Weile nicht mehr geteilt. Nach einem kurzen\n"
+    L"  Verbindungsaussetzer ging der ganze Spielstand auf einmal raus und verloren - jetzt gebündelt und in Portionen.\n"
+    L"- Behoben: Abstürze nach dem Respawn / Spiel laden (die Nachrichtenfenster der alten Welt wurden weiter benutzt).\n"
+    L"- Kapitel 1: Checkpoints werden wieder geteilt - Spiel laden und Respawn bringen dich zum weitesten (sofort).\n"
+    L"- Kapitel 1: Schlüssel und Türen werden geteilt; wer später kommt, bekommt alles - auch nach einem Absturz.\n"
+    L"- Ziehbare Objekte drehen sich beim anderen nicht mehr wild.\n"
+    L"- Speedrun-Modus (Kapitel-1-Einstellungen): nur was ein Run braucht, beste fps.\n"
+    L"- Der Launcher aktualisiert sich beim Start selbst (Launcher-Einstellungen: Automatische Updates).\n"
+    L"- Das letzte Spiel-Log bleibt erhalten (UE4SS_previous.log); Problem melden packt es mit dem Absturzbericht ein.\n"
+    L"- Chat: getippter Text ist lesbar. Das Fenster lässt sich vergrößern.";
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
 
 // ------------------------------------------------------------------ state
-enum class Page { Welcome, Chapter, Settings, Profile, App, Servers };
+enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends };
 
 static HWND g_wnd;
 static Profile g_prof;
@@ -762,6 +846,25 @@ static void draw_sidebar(int h) {
 
     // launcher settings (colours, animations)
     {
+        if (FEATURE_ONLINE) {   // friends
+            RECT fr = R(16, h - 138, 248, 36);
+            bool fon = g_page == Page::Friends;
+            double fht = anim(akey(17, 0, 0), hover(fr) ? 1.0 : 0.0, 16);
+            fill(fr, mix(mix(C_SIDE, C_CARD, fht), C_CARD2, fon ? 1.0 : 0.0), 10);
+            std::wstring lbl = tr(L"Friends");
+            if (!g_fnet.incoming.empty()) lbl += L" (" + std::to_wstring(g_fnet.incoming.size()) + tr(L" new") + L")";
+            else if (g_fnet_state == 1 && !g_fnet.friends.empty()) {
+                int on = 0;
+                for (auto& f : g_fnet.friends) if (f.online) on++;
+                lbl += L" (" + std::to_wstring(on) + tr(L" online") + L")";
+            } else if (g_fnet_state != 1 && !g_friends.empty()) lbl += L" (" + std::to_wstring(g_friends.size()) + L")";
+            text(R(32, h - 138, 220, 36), lbl, F_SMALL, fon ? C_TEXT : mix(C_DIM, C_TEXT, fht), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            click(fr, [] {
+                g_page = Page::Friends; g_capture = -1; g_focus = { &g_friend_edit, FRIEND_NAME_MAX + 6, false }; friends_refresh();
+                if (!friends_used()) { ini_set(L"Launcher", L"FriendsOn", L"1"); g_friends_on = 1; }
+                friends_net_sync(GetTickCount64() - g_fnet_hello_at > 15000 || g_fnet_hello_at == 0);
+            });
+        }
         RECT r = R(16, h - 98, 248, 36);
         bool on = g_page == Page::App;
         double ht = anim(akey(16, 0, 0), hover(r) ? 1.0 : 0.0, 16);
@@ -792,6 +895,49 @@ static std::wstring system_summary() {
     return s;
 }
 // returns the zip path (on the desktop) or "" when Windows' tar isn't there (old Windows, Wine)
+// the game's newest crash report (%LOCALAPPDATA%\\<Project>\\Saved\\Crashes\\<id>\\): call stack + minidump
+static void copy_newest_crash(const Chapter& ch, const std::wstring& to) {
+    CrashInfo ci;
+    if (!newest_crash(ch, ci)) return;
+    for (const wchar_t* f : { L"CrashContext.runtime-xml", L"UE4Minidump.dmp", L"UEMinidump.dmp" })
+        CopyFileW((ci.dir + f).c_str(), (to + L"\\crash_" + f).c_str(), FALSE);
+}
+
+// Automatic crash reports: a crash report folder newer than the last one sent (and not older than 3 days)
+// is sent once, in the background. Only with the player's consent (g_crashrep == 1).
+static void maybe_report_crashes() {
+    if (!FEATURE_ONLINE) return;
+    if (g_crashrep != 1) return;
+    for (size_t i = 0; i < g_ch.size() && i < 8; i++) {
+        const Chapter& ch = g_ch[i];
+        if (!playable(ch) || ch.dir.empty() || g_running[i]) continue;
+        CrashInfo ci;
+        if (!newest_crash(ch, ci)) continue;
+        std::wstring key = L"LastCrashSent" + std::to_wstring(ch.num);
+        ULONGLONG last = _wcstoui64(ini_get(L"Launcher", key.c_str(), L"0").c_str(), nullptr, 10);
+        if (ci.time <= last || now_ft() - ci.time > REPORT_MAX_AGE) continue;
+        ini_set(L"Launcher", key.c_str(), std::to_wstring(ci.time));        // once, even if sending fails
+        std::wstring ver = inst_ver(ch).empty() ? std::wstring(MOD_VERSION) : inst_ver(ch);
+        std::wstring os = system_summary();
+        std::thread([w = g_wnd, ch, ci, ver, os] {
+            std::string err;
+            bool ok = send_crash_report(ch, ci, ver, os, err);
+            PostMessageW(w, WM_APP_CRASHSENT, ok ? 1 : 0, 0);
+        }).detach();
+    }
+}
+// first start: ask once whether crash reports may be sent (changeable in the launcher settings)
+static void ask_crash_consent() {
+    if (!FEATURE_ONLINE) return;
+    if (g_crashrep != -1) return;
+    int r = MessageBoxW(g_wnd, tr(L"When the game crashes, may the launcher send a crash report to the PoppyCoop developers?\n\n"
+        L"It contains the error message, the end of the mod's log, the mod version and your Windows version - user names "
+        L"in folder paths are removed. It helps us fix crashes.\n\nYou can change this any time in the launcher settings.").c_str(),
+        tr(L"Crash reports").c_str(), MB_YESNO | MB_ICONQUESTION);
+    g_crashrep = r == IDYES ? 1 : 0;
+    ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
+}
+
 static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log) {
     wchar_t tmp[MAX_PATH], sys[MAX_PATH], desk[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, tmp) || !GetSystemDirectoryW(sys, MAX_PATH)) return L"";
@@ -802,6 +948,8 @@ static std::wstring make_report_zip(const Chapter& ch, const std::wstring& log) 
     run_wait(L"cmd.exe /c rmdir /s /q \"" + dir + L"\"", 15000);
     CreateDirectoryW(dir.c_str(), nullptr);
     CopyFileW(log.c_str(), (dir + L"\\UE4SS.log").c_str(), FALSE);
+    CopyFileW((bin_dir(ch) + L"\\ue4ss\\UE4SS_previous.log").c_str(), (dir + L"\\UE4SS_previous.log").c_str(), FALSE);
+    copy_newest_crash(ch, dir);
     std::wstring mod = bin_dir(ch) + L"\\ue4ss\\Mods\\PoppyCoop\\";
     for (const wchar_t* f : { L"config.txt", L"keybinds.txt", L"bugreport.txt" }) CopyFileW((mod + f).c_str(), (dir + L"\\" + f).c_str(), FALSE);
     std::wstring info = system_summary() + L"Chapter " + std::to_wstring(ch.num) + L", installed mod v" + inst_ver(ch) + L"\r\nGame folder " + ch.dir + L"\r\n";
@@ -1287,6 +1435,27 @@ static void draw_profile(int h) {
     (void)h;
 }
 
+// Download the newest release and swap the exe (WM_APP_SELFUPD restarts the launcher when it worked).
+static void start_self_update() {
+    if (g_updating || (g_latest_zip.empty() && g_latest_exe.empty())) return;
+    g_updating = true;
+    toast(tr(L"Updating to v") + g_latest + L"...");
+    std::wstring url = g_latest_zip, exe_url = g_latest_exe;
+    std::thread([w = g_wnd, url, exe_url] {
+        std::wstring* r = new std::wstring(self_update(url, exe_url));
+        if (!PostMessageW(w, WM_APP_SELFUPD, 0, (LPARAM)r)) delete r;
+    }).detach();
+}
+// "Automatic updates": a newer release found at start is installed right away - unless a game is running, or
+// this very version was already tried once (a broken download must not restart the launcher in a loop)
+static void maybe_auto_update() {
+    if (!g_autoupd || g_updating || g_latest.empty() || (g_latest_zip.empty() && g_latest_exe.empty()) || !version_newer(g_latest, MOD_VERSION)) return;
+    for (size_t i = 0; i < g_ch.size() && i < 8; i++) if (g_running[i]) return;
+    if (ini_get(L"Launcher", L"AutoUpdateTried") == g_latest) return;
+    ini_set(L"Launcher", L"AutoUpdateTried", g_latest);
+    start_self_update();
+}
+
 // ------------------------------------------------------------------ launcher settings page (colours, animations)
 static void save_app_prefs() {
     ini_set(L"Launcher", L"Theme", g_theme);
@@ -1295,6 +1464,8 @@ static void save_app_prefs() {
     ini_set(L"Launcher", L"Lang", g_lang == 1 ? L"de" : L"en");
     ini_set(L"Launcher", L"Experimental", g_experimental ? L"1" : L"0");
     ini_set(L"Launcher", L"Multi", g_multi ? L"1" : L"0");
+    ini_set(L"Launcher", L"AutoUpdate", g_autoupd ? L"1" : L"0");
+    if (g_crashrep >= 0) ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
 }
 static void set_experimental(bool on) {
     g_experimental = on;
@@ -1372,6 +1543,8 @@ static void draw_app(int h) {
     row(410, 0, L"Animations", L"Smooth fades and movements. Turn off on very slow PCs.", g_anims, [] { g_anims = !g_anims; save_app_prefs(); });
     row(470, 1, L"Experimental chapters", L"Try Chapters 3-5: you see each other, but doors, puzzles and items aren't shared.", g_experimental, [] { set_experimental(!g_experimental); });
     row(530, 2, L"Several games at once", L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
+    if (FEATURE_ONLINE) row(650, 4, L"Send crash reports", L"After a crash, send the error and the mod log to the developers (no user names).", g_crashrep == 1, [] { g_crashrep = g_crashrep == 1 ? 0 : 1; save_app_prefs(); if (g_crashrep == 1) maybe_report_crashes(); });
+    row(590, 3, L"Automatic updates", L"Install a new version by itself when the launcher starts.", g_autoupd, [] { g_autoupd = !g_autoupd; save_app_prefs(); if (g_autoupd) maybe_auto_update(); });
     (void)h;
 }
 
@@ -1383,6 +1556,248 @@ static void select_server(int i) {
     if (!trim(g_prof.name).empty())
         for (auto& ch : g_ch) if (playable(ch) && !inst_ver(ch).empty()) write_mod_settings(ch, g_prof);
     if (!probe_of(g_servers[i])) start_probe(false);
+}
+
+// ------------------------------------------------------------------ friends page (basics: no online status yet)
+static std::vector<Friend> g_met;           // players met, newest first (refreshed when the page opens)
+static void friends_refresh() {
+    std::vector<std::wstring> dirs;
+    for (auto& ch : g_ch) if (!ch.dir.empty()) dirs.push_back(bin_dir(ch) + L"\\ue4ss\\Mods\\PoppyCoop");
+    g_met = players_met(dirs, g_prof.name);
+    friends_update_from(g_met);
+}
+static void join_friend_room(const Friend& f) {
+    g_prof.join_code = f.room;
+    g_prof.tab = 2;
+    save_profile();
+    g_page = Page::Chapter;
+    g_focus = {};
+    toast(tr(L"Room code of ") + f.name + L": " + f.room + tr(L" - press PLAY to join."));
+}
+static void add_friend_toast(const Friend& f, AddResult r) {
+    switch (r) {
+    case AddResult::Added: toast(friend_code(f) + tr(L" is now your friend.")); break;
+    case AddResult::Already: toast(friend_code(f) + tr(L" is already your friend.")); break;
+    case AddResult::NeedsTag: toast(tr(L"Enter the whole friend code with the number, e.g. Max#12345.")); break;
+    case AddResult::Self: toast(tr(L"That's your own friend code.")); break;
+    case AddResult::Full: toast(tr(L"The friend list is full.")); break;
+    default: toast(tr(L"Type your friend's code first (Name#12345).")); break;
+    }
+}
+// ---- friends server
+static HelloInfo hello_info() {
+    HelloInfo hi;
+    hi.name = clean_name(g_prof.name.empty() ? L"Player" : g_prof.name);
+    hi.tag = player_tag();
+    for (size_t i = 0; i < g_ch.size() && i < 8; i++)
+        if (g_running[i]) { hi.ingame = true; hi.chapter = g_ch[i].num; hi.room = room_for(g_prof); break; }
+    for (auto& c : hi.room) c = towupper(c);
+    std::wstring keep;
+    for (wchar_t c : hi.room) if ((c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'-') keep += c;
+    hi.room = keep.substr(0, 16);
+    return hi;
+}
+// hello (optional) + list, in the background
+static void friends_net_sync(bool hello) {
+    if (g_fnet_busy) return;
+    g_fnet_busy = true;
+    if (hello) g_fnet_hello_at = GetTickCount64();
+    HelloInfo hi = hello_info();
+    std::thread([w = g_wnd, hello, hi] {
+        auto* r = new FriendsResult();
+        std::wstring new_tag;
+        bool ok = true;
+        if (hello) {
+            FriendsResult h = api_hello(hi, new_tag);
+            ok = h.reachable && h.error.empty();
+            if (!ok) { *r = h; }
+        }
+        if (ok) *r = api_action("list", L"/v1/list", {});
+        if (r->error == "not_registered" && !hello) {        // first contact: register, then list
+            FriendsResult h = api_hello(hi, new_tag);
+            if (h.reachable && h.error.empty()) *r = api_action("list", L"/v1/list", {});
+            else *r = h;
+        }
+        if (!new_tag.empty()) r->ok_word = "newtag:" + utf8(new_tag);
+        if (!PostMessageW(w, WM_APP_FRIENDS, 0, (LPARAM)r)) delete r;
+    }).detach();
+}
+// an action (request / respond / remove), then the list again
+static void friends_net_do(const char* action, const wchar_t* path, std::vector<std::pair<std::string, std::string>> fields) {
+    if (g_fnet_busy) { toast(tr(L"One moment...")); return; }
+    g_fnet_busy = true;
+    std::string act = action;
+    std::wstring wpath = path;
+    std::thread([w = g_wnd, act, wpath, fields] {
+        auto* r = new FriendsResult(api_action(act.c_str(), wpath.c_str(), fields));
+        if (r->reachable && r->error.empty()) {
+            FriendsResult l = api_action("list", L"/v1/list", {});
+            if (l.reachable && l.error.empty()) { r->has_list = true; r->friends = l.friends; r->incoming = l.incoming; r->outgoing = l.outgoing; }
+        }
+        if (!PostMessageW(w, WM_APP_FRIENDS, 0, (LPARAM)r)) delete r;
+    }).detach();
+}
+static std::wstring fnet_error_text(const std::string& e) {
+    if (e == "not_found") return tr(L"No player with that friend code.");
+    if (e == "self") return tr(L"That's your own friend code.");
+    if (e == "already") return tr(L"You are already friends.");
+    if (e == "limit") return tr(L"Too many requests - try again later.");
+    if (e == "bad_auth") return tr(L"Friends server: your account key doesn't match.");
+    return tr(L"Friends server error: ") + wide(e);
+}
+static void on_friends_result(FriendsResult* r) {
+    g_fnet_busy = false;
+    if (r->ok_word.rfind("newtag:", 0) == 0) {          // our number was taken on the server: use the new one everywhere
+        set_player_tag(wide(r->ok_word.substr(7)));
+        for (auto& ch : g_ch) if (playable(ch) && !inst_ver(ch).empty()) write_mod_settings(ch, g_prof);
+        toast(tr(L"Your friend code is now ") + clean_name(g_prof.name) + L"#" + player_tag());
+    }
+    if (!r->reachable || r->error == "not_set_up") { g_fnet_state = 2; return; }
+    g_fnet_state = 1;
+    if (r->has_list || (r->action == "list" && r->error.empty())) {
+        g_fnet.friends = r->friends; g_fnet.incoming = r->incoming; g_fnet.outgoing = r->outgoing;
+    }
+    if (r->action == "request") {
+        if (r->error.empty()) toast(r->ok_word == "friends" ? tr(L"You are friends now!") : tr(L"Friend request sent."));
+        else toast(fnet_error_text(r->error));
+    } else if (r->action == "respond" && r->error.empty()) {
+        toast(r->ok_word == "friends" ? tr(L"You are friends now!") : tr(L"Request declined."));
+    } else if (r->action == "remove" && r->error.empty()) {
+        toast(tr(L"Removed."));
+    } else if (!r->error.empty() && r->action != "list" && r->action != "hello") {
+        toast(fnet_error_text(r->error));
+    }
+}
+static void draw_friends_local(int h);
+static void draw_friends(int h) {
+    if (g_fnet_state != 1) { draw_friends_local(h); return; }
+    text(R(MX, 28, MW, 18), tr(L"FRIENDS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW - 330, 40), tr(L"Your friends"), F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    std::wstring mine = clean_name(g_prof.name.empty() ? L"Player" : g_prof.name) + L"#" + player_tag();
+    text(R(MX + MW - 330, 40, 200, 16), tr(L"YOUR FRIEND CODE"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + MW - 330, 56, 200, 26), mine, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    button(MX + MW - 120, 48, 120, 34, tr(L"Copy"), Btn::Secondary, [mine] { copy_text(mine); toast(tr(L"Copied: ") + mine); });
+    text(R(MX, 92, MW, 20), tr(L"Send a friend request with their friend code. Friends see each other online and can join each other."), F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    textbox(MX, 124, 300, 40, &g_friend_edit, FRIEND_NAME_MAX + 6, false, tr(L"Friend code, e.g. Max#12345"), F_BODY);
+    button(MX + 312, 126, 170, 36, tr(L"Send request"), Btn::Primary, [] {
+        Friend f = parse_code(g_friend_edit);
+        if (f.name.empty() || f.tag.empty()) { toast(tr(L"Enter the whole friend code with the number, e.g. Max#12345.")); return; }
+        friends_net_do("request", L"/v1/request", { { "code", utf8(friend_code(f)) } });
+        g_friend_edit.clear();
+    });
+    int y = 178;
+    // incoming requests
+    for (size_t i = 0; i < g_fnet.incoming.size() && y < h - 200; i++) {
+        std::wstring code = g_fnet.incoming[i];
+        RECT r = R(MX, y, MW, 50);
+        fill(r, mix(C_CARD, accent(), 0.12), 10);
+        text(R(MX + 18, y + 6, MW - 380, 20), code, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(MX + 18, y + 26, MW - 380, 18), tr(L"wants to be your friend"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+        button(MX + MW - 330, y + 8, 180, 34, tr(L"Accept"), Btn::Primary, [code] { friends_net_do("respond", L"/v1/respond", { { "code", utf8(code) }, { "accept", "1" } }); });
+        button(MX + MW - 140, y + 8, 124, 34, tr(L"Decline"), Btn::Ghost, [code] { friends_net_do("respond", L"/v1/respond", { { "code", utf8(code) }, { "accept", "0" } }); });
+        y += 56;
+    }
+    if (g_fnet.friends.empty() && g_fnet.incoming.empty())
+        text(R(MX, y, MW, 30), tr(L"No friends yet - send a request with a friend code, or to someone you played with below."), F_SMALL, C_DIM);
+    for (size_t i = 0; i < g_fnet.friends.size() && y < h - 200; i++) {
+        const NetFriend f = g_fnet.friends[i];
+        RECT r = R(MX, y, MW, 50);
+        fill(r, mix(C_CARD, C_CARD2, anim(akey(51, (int)i, 0), hover(r) ? 0.7 : 0.0, 16)), 10);
+        circle(MX + 22, y + 25, 6, f.online ? C_OK : mix(C_DIM, C_CARD, 0.4));
+        text(R(MX + 38, y + 6, MW - 400, 20), f.code, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        std::wstring st = !f.online ? tr(L"Offline") : f.chapter > 0 ? tr(L"Playing Chapter ") + std::to_wstring(f.chapter) + (f.room.empty() ? L"" : tr(L" - room ") + f.room) : tr(L"Online");
+        text(R(MX + 38, y + 26, MW - 400, 18), st, F_SMALL, f.online ? C_OK : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (f.online && !f.room.empty()) {
+            Friend jf{ parse_code(f.code).name, L"", f.room };
+            button(MX + MW - 330, y + 8, 180, 34, tr(L"Join"), Btn::Secondary, [jf] { join_friend_room(jf); });
+        }
+        button(MX + MW - 140, y + 8, 124, 34, tr(L"Remove"), Btn::Ghost, [f] { friends_net_do("remove", L"/v1/remove", { { "code", utf8(f.code) } }); });
+        y += 56;
+    }
+    for (size_t i = 0; i < g_fnet.outgoing.size() && y < h - 170; i++) {
+        std::wstring code = g_fnet.outgoing[i];
+        text(R(MX, y + 4, MW - 160, 24), tr(L"Waiting for ") + code + tr(L" to accept"), F_SMALL, C_DIM, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        button(MX + MW - 140, y, 124, 30, tr(L"Cancel"), Btn::Ghost, [code] { friends_net_do("remove", L"/v1/remove", { { "code", utf8(code) } }); });
+        y += 36;
+    }
+    // recently played with
+    int ry = std::max(y + 20, h - 170);
+    text(R(MX, ry, MW, 18), tr(L"RECENTLY PLAYED WITH"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    int x = MX, n = 0;
+    for (auto& m : g_met) {
+        if (m.tag.empty()) continue;                       // older mod: no friend code to send a request to
+        std::wstring code = friend_code(m);
+        bool known = false;
+        for (auto& f : g_fnet.friends) if (lower(f.code) == lower(code)) known = true;
+        for (auto& o : g_fnet.outgoing) if (lower(o) == lower(code)) known = true;
+        if (known) continue;
+        std::wstring lbl = L"+ " + code;
+        int bw = std::min(260, text_w(lbl, F_SMALL) + 40);
+        if (x + bw > MX + MW) break;
+        button(x, ry + 24, bw, 32, lbl, Btn::Ghost, [code] { friends_net_do("request", L"/v1/request", { { "code", utf8(code) } }); });
+        x += bw + 8;
+        n++;
+    }
+    if (n == 0) text(R(MX, ry + 24, MW, 18), tr(L"Nobody new yet - players show up here after you played together."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+}
+// fallback without the friends server: the local list (names + last room)
+static void draw_friends_local(int h) {
+    text(R(MX, 28, MW, 18), tr(L"FRIENDS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(MX, 46, MW - 330, 40), tr(L"Your friends"), F_H1, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    // own friend code
+    std::wstring mine = clean_name(g_prof.name.empty() ? L"Player" : g_prof.name) + L"#" + player_tag();
+    text(R(MX + MW - 330, 40, 200, 16), tr(L"YOUR FRIEND CODE"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX + MW - 330, 56, 200, 26), mine, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    button(MX + MW - 120, 48, 120, 34, tr(L"Copy"), Btn::Secondary, [mine] { copy_text(mine); toast(tr(L"Copied: ") + mine); });
+    text(R(MX, 92, MW, 20), tr(L"Add friends with their friend code. Their last room is remembered - join it with one click."), F_BODY, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // add by code
+    textbox(MX, 124, 300, 40, &g_friend_edit, FRIEND_NAME_MAX + 6, false, tr(L"Friend code, e.g. Max#12345"), F_BODY);
+    button(MX + 312, 126, 120, 36, tr(L"Add"), Btn::Primary, [] {
+        Friend f = parse_code(g_friend_edit);
+        for (auto& m : g_met) if (same_player(m, f) && !f.tag.empty()) { f.room = m.room; break; }
+        AddResult r = friend_add(f, true);
+        add_friend_toast(f, r);
+        if (r == AddResult::Added) g_friend_edit.clear();
+    });
+
+    // the list
+    int y = 180;
+    if (g_friends.empty())
+        text(R(MX, y, MW, 40), tr(L"No friends yet - add a friend code above, or pick someone you played with below."), F_SMALL, C_DIM);
+    int shown = 0;
+    for (size_t i = 0; i < g_friends.size() && y < h - 230; i++, shown++) {
+        const Friend f = g_friends[i];
+        RECT r = R(MX, y, MW, 50);
+        fill(r, mix(C_CARD, C_CARD2, anim(akey(50, (int)i, 0), hover(r) ? 0.7 : 0.0, 16)), 10);
+        text(R(MX + 18, y + 6, MW - 360, 20), friend_code(f), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(MX + 18, y + 26, MW - 360, 18), f.room.empty() ? tr(L"Not played together yet") : tr(L"Last room: ") + f.room,
+             F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (!f.room.empty())
+            button(MX + MW - 330, y + 8, 180, 34, tr(L"Join their room"), Btn::Secondary, [f] { join_friend_room(f); });
+        button(MX + MW - 140, y + 8, 124, 34, tr(L"Remove"), Btn::Ghost, [f] { friend_remove(f); toast(friend_code(f) + tr(L" removed.")); });
+        y += 56;
+    }
+    if (shown < (int)g_friends.size())
+        text(R(MX, y, MW, 18), L"+" + std::to_wstring(g_friends.size() - shown) + tr(L" more (make the window bigger)"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+
+    // recently played with (not friends yet)
+    int ry = std::max(y + 24, h - 200);
+    text(R(MX, ry, MW, 18), tr(L"RECENTLY PLAYED WITH"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    int x = MX, row = 0, n = 0;
+    for (auto& m : g_met) {
+        if (friend_index(m) >= 0) continue;
+        std::wstring lbl = L"+ " + friend_code(m);
+        int bw = std::min(260, text_w(lbl, F_SMALL) + 40);
+        if (x + bw > MX + MW) { x = MX; row++; }
+        if (row > 1) break;
+        Friend f = m;
+        button(x, ry + 24 + row * 40, bw, 32, lbl, Btn::Ghost, [f] { add_friend_toast(f, friend_add(f, false)); });
+        x += bw + 8;
+        n++;
+    }
+    if (n == 0) text(R(MX, ry + 24, MW, 18), tr(L"Nobody new yet - names show up here after you played together."), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+    text(R(MX, h - 60, MW, 18), g_fnet_state == 2 ? tr(L"Friends server not reachable - showing your local list.") : tr(L"Players with an older version show without a number. Online status and invites come later."), F_SMALL, g_fnet_state == 2 ? C_WARN : mix(C_DIM, C_BG, 0.3), DT_LEFT | DT_SINGLELINE);
 }
 
 static void draw_servers(int h) {
@@ -1521,6 +1936,7 @@ static void paint(HDC wdc, int w, int h) {
     else if (g_page == Page::Welcome) draw_welcome(lh);
     else if (g_page == Page::App) draw_app(lh);
     else if (g_page == Page::Servers) draw_servers(lh);
+    else if (g_page == Page::Friends) draw_friends(lh);
     else draw_chapter(lh);
 
     // toast: fades and slides in, fades out
@@ -1542,14 +1958,8 @@ static void paint(HDC wdc, int w, int h) {
             bool running = false;
             for (size_t i = 0; i < g_ch.size() && i < 8; i++) if (g_running[i]) running = true;
             if (running) { toast(tr(L"Close the game first.")); return; }
-            if (g_latest_zip.empty()) { ShellExecuteW(nullptr, L"open", RELEASES_PAGE, nullptr, nullptr, SW_SHOWNORMAL); return; }
-            g_updating = true;
-            toast(tr(L"Downloading the update..."));
-            std::wstring url = g_latest_zip;
-            std::thread([w = g_wnd, url] {
-                std::wstring* r = new std::wstring(self_update(url));
-                if (!PostMessageW(w, WM_APP_SELFUPD, 0, (LPARAM)r)) delete r;
-            }).detach();
+            if (g_latest_zip.empty() && g_latest_exe.empty()) { ShellExecuteW(nullptr, L"open", RELEASES_PAGE, nullptr, nullptr, SW_SHOWNORMAL); return; }
+            start_self_update();
         });
     else
         button(MX + MW - 130, lh - 34, 130, 28, tr(L"What's new"), Btn::Ghost, [] {
@@ -1827,6 +2237,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             else if (ch >= 32 && ch != 127 && v.size() < g_focus.max && !(GetKeyState(VK_CONTROL) & 0x8000)) {
                 if (g_focus.code) { if (iswalnum(ch) && ch < 128) v += (wchar_t)towupper(ch); }
                 else if (g_focus.value == &g_new_addr) { if (ch > 32 && ch < 127) v += ch; }   // server address: URL / IP
+                else if (g_focus.value == &g_friend_edit) { if ((iswalnum(ch) && ch < 128) || ch == L'_' || ch == L'-' || ch == L'#') v += ch; }
                 else if ((iswalnum(ch) && ch < 128) || ch == L'_' || ch == L'-' || ch == L' ') v += ch;
             }
             if (g_focus.value == &g_prof.join_code || g_focus.value == &g_prof.name) save_profile();
@@ -1845,7 +2256,10 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             bool changed = false;
             for (size_t i = 0; i < g_ch.size() && i < 8; i++) {
                 bool r = game_running(g_ch[i]);
-                if (r != g_running[i]) { g_running[i] = r; changed = true; }
+                if (r != g_running[i]) {
+                    if (!r) g_crash_check_at = GetTickCount64() + 10000;   // the crash reporter writes its folder after the exit
+                    g_running[i] = r; changed = true;
+                }
             }
             {   // Discord Rich Presence while a chapter runs (only with a DiscordAppId in launcher.ini)
                 static DiscordRP rp;
@@ -1865,6 +2279,14 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 changed = true;
             }
             ULONGLONG nw = GetTickCount64();
+            if (g_crash_check_at && nw > g_crash_check_at) { g_crash_check_at = 0; maybe_report_crashes(); }
+            // friends: status heartbeat + list every 60 s (only once the player has opened the friends page);
+            // the list every 15 s while the page is open
+            if (FEATURE_ONLINE && friends_used() && !g_fnet_busy && nw - g_fnet_hello_at > (g_fnet_state == 2 ? 300000ULL : 60000ULL)) friends_net_sync(true);
+            else if (g_page == Page::Friends && !g_fnet_busy && g_fnet_state == 1 && nw - g_fnet_hello_at > 15000) {
+                static ULONGLONG list_at = 0;
+                if (nw - list_at > 15000) { list_at = nw; friends_net_sync(false); }
+            }
             if (!g_toast.empty() && nw > g_toast_until + 1500) g_toast.clear();   // after its fade-out
             if (changed || (!g_toast.empty() && nw > g_toast_until)) InvalidateRect(h, nullptr, FALSE);
             return 0;
@@ -1901,9 +2323,20 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
+    case WM_APP_FRIENDS: {
+        FriendsResult* r = (FriendsResult*)lp;
+        if (r) { on_friends_result(r); delete r; }
+        InvalidateRect(h, nullptr, FALSE);
+        return 0;
+    }
+    case WM_APP_CRASHSENT:
+        toast(wp ? tr(L"The game crashed - a crash report was sent to the developers. Thanks!")
+                 : tr(L"The game crashed - sending the crash report failed. \"Report a problem\" makes a zip for us."));
+        return 0;
     case WM_APP_UPDATE: {
         std::wstring* t = (std::wstring*)lp;
         if (t) { g_latest = *t; delete t; }
+        maybe_auto_update();
         InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
@@ -2062,6 +2495,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     ini_init();
     g_experimental = ini_get(L"Launcher", L"Experimental", L"0") == L"1";
     g_multi = ini_get(L"Launcher", L"Multi", L"0") == L"1";
+    g_autoupd = ini_get(L"Launcher", L"AutoUpdate", L"1") != L"0";
+    friends_load();
+    {
+        std::wstring cr = ini_get(L"Launcher", L"CrashReports", L"");
+        g_crashrep = cr.empty() ? -1 : (cr == L"1" ? 1 : 0);
+    }
     chapters_init();
     for (auto& c : g_ch) chapter_load(c);
     g_prof.name = clean_name(ini_get(L"Launcher", L"Name"));
@@ -2124,6 +2563,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     open_invite(arg);
     ShowWindow(g_wnd, show);
     UpdateWindow(g_wnd);
+    if (after_update) toast(tr(L"Updated to v") + MOD_VERSION);
+    if (!g_test) { ask_crash_consent(); maybe_report_crashes(); }
     SetTimer(g_wnd, TIMER_POLL, 1000, nullptr);
     SetTimer(g_wnd, TIMER_CARET, 530, nullptr);
     start_probe(false);

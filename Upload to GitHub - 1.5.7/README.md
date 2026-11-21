@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.5.6.zip`**
+Download **`PoppyCoop_Launcher_1.5.7.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,17 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.5.7
+- **Fixed: doors, levers, items and checkpoints stopped syncing after a while** (both chapters). After a short connection hiccup the game sent its whole world state at once and the network helper threw it away. Messages are now bundled and sent in portions.
+- **Fixed: crashes after respawning or Load Game** - the message boxes of the old world were still being used.
+- **Chapter 1: checkpoints are shared again, instantly** - Load Game and respawns put you at the furthest checkpoint anyone reached.
+- **Chapter 1: keys and doors are shared**, and a player who joins later (also after a crash) gets everything that was done before.
+- **Pullable objects** no longer spin wildly on the other player's screen.
+- **Speedrun mode** (Chapter 1 settings): only what a run needs is shared, best fps. Switches you change afterwards stay as you set them.
+- **Automatic updates:** from this version on the launcher updates itself when it starts (Launcher settings → Automatic updates). Works on Linux / Steam Deck too.
+- **Crash logs are kept:** the last game's log is saved as `UE4SS_previous.log`, and "Report a problem" adds it and the game's crash report to the zip - send it to us after a crash.
+- Chat: the text you type is readable now. The launcher window can be resized.
 
 ### 1.5.6
 Small Chapter 1 update.

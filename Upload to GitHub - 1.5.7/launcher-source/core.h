@@ -22,6 +22,11 @@
 #define MOD_VERSION L"0.0.0"
 #endif
 #define LAUNCHER_VERSION L"3.0"
+// Online features that need the poppycoop-api worker (tools/api-worker): automatic crash reports and the
+// friends system. Off until the worker is deployed - then build with FEATURE_ONLINE 1 (or -DFEATURE_ONLINE=1).
+#ifndef FEATURE_ONLINE
+#define FEATURE_ONLINE 0
+#endif
 
 static const wchar_t* RELAY_URL = L"wss://poppycoop-relay.poppycoopnet.workers.dev";
 
@@ -499,6 +504,25 @@ static std::wstring room_for(const Profile& p) {
     return L"public";
 }
 
+// The player's friend-code number (Name#12345): made once, kept in launcher.ini. Names aren't unique - two
+// players called "Max" are "Max#12345" and "Max#80211". Handed to the mod (config tag=) which tells the others.
+static std::wstring& player_tag_cache() { static std::wstring tag; return tag; }
+// the friends server said the number is taken: use the new one from now on
+static void set_player_tag(const std::wstring& t) { player_tag_cache() = t; ini_set(L"Launcher", L"Tag", t); }
+static std::wstring player_tag() {
+    std::wstring& tag = player_tag_cache();
+    if (!tag.empty()) return tag;
+    tag = ini_get(L"Launcher", L"Tag", L"");
+    bool ok = tag.size() == 5;
+    for (wchar_t c : tag) if (c < L'0' || c > L'9') ok = false;
+    if (!ok) {
+        std::random_device rd;
+        tag = std::to_wstring(10000 + rd() % 90000);
+        ini_set(L"Launcher", L"Tag", tag);
+    }
+    return tag;
+}
+
 static bool write_mod_settings(const Chapter& c, const Profile& p) {
     std::wstring m = mod_dir(c);
     std::wstring cfg = L"# written by PoppyCoop Launcher " LAUNCHER_VERSION L"\n";
@@ -507,7 +531,7 @@ static bool write_mod_settings(const Chapter& c, const Profile& p) {
     cfg += L"mode=" + p.srv_mode + L"\nname=" + nm + L"\nhost_ip=" + (p.srv_mode == L"host" ? L"127.0.0.1" : p.srv_addr)
          + L"\nport=" + std::to_wstring(p.srv_port) + L"\n";
     cfg += L"room=" + room_for(p) + L"\ncolor=" + p.color + L"\nautostart_helper=true\nsend_hz=20\n";
-    cfg += L"chapter=" + std::to_wstring(c.num) + L"\n";        // Chapters 3+: the mod can't tell them apart by exe name
+    cfg += L"chapter=" + std::to_wstring(c.num) + L"\ntag=" + player_tag() + L"\n";        // Chapters 3+: the mod can't tell them apart by exe name
     for (auto& o : c.sync) if (o.chapters & (1 << (c.num - 1))) cfg += std::wstring(o.id) + L"=" + (o.value ? L"true" : L"false") + L"\n";
     std::wstring kb = L"# PoppyCoop keys - set in the launcher (chapter settings). F8/F9 are left free for other mods.\n";
     for (auto& k : c.keys) kb += std::wstring(k.id) + L"=" + k.value + L"\n";
@@ -545,7 +569,15 @@ static bool via_steam(const Chapter& c) { return lower(c.dir).find(L"\\steamapps
 
 // window > 0: another game window on this PC (Nucleus Co-op / split screen) - started directly with its own
 // name / colour / room in the environment (the mod reads POPPYCOOP_NAME / _COLOR / _ROOM / _INSTANCE)
+static std::wstring bin_dir(const Chapter& c);
+// UE4SS overwrites UE4SS.log when the game starts - keep the last session's log (the one that ends with a
+// crash) as UE4SS_previous.log, so it can still be sent after the game was started again
+static void keep_previous_log(const Chapter& c) {
+    std::wstring dir = bin_dir(c) + L"\\ue4ss\\";
+    CopyFileW((dir + L"UE4SS.log").c_str(), (dir + L"UE4SS_previous.log").c_str(), FALSE);
+}
 static bool launch_game(const Chapter& c, int window = 0, const std::wstring& name = L"", const std::wstring& color = L"", const std::wstring& room = L"") {
+    if (window == 0) keep_previous_log(c);        // (more windows of one game share the log: only the first)
     if (window > 0 || c.experimental || !*c.appid) {
         std::wstring exe = c.dir + L"\\" + c.exe;
         std::wstring cmd = L"\"" + exe + L"\"";
@@ -610,6 +642,7 @@ struct Probe {
 #define RELEASES_PATH L"/repos/LuJoCoding/Poppy-Coop-Launcher/releases/latest"
 #define RELEASES_PAGE L"https://github.com/LuJoCoding/Poppy-Coop-Launcher/releases/latest"
 static std::wstring g_latest_zip;   // download URL of the newest release's zip (empty: unknown)
+static std::wstring g_latest_exe;   // ... and of its bare PoppyCoopLauncher.exe (1.5.7+; no unzipping needed)
 static std::wstring latest_release() {
     std::wstring tag;
     HINTERNET s = WinHttpOpen(L"PoppyCoopLauncher/" LAUNCHER_VERSION, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, nullptr, nullptr, 0);
@@ -641,10 +674,12 @@ static std::wstring latest_release() {
             size_t b = a == std::string::npos ? a : body.find('"', a + 1);
             if (a == std::string::npos || b == std::string::npos || b - a > 300) continue;
             std::string url = body.substr(a + 1, b - a - 1);
-            if (url.compare(0, pre.size(), pre) == 0 && url.size() > 4 && url.substr(url.size() - 4) == ".zip") {
+            if (url.compare(0, pre.size(), pre) != 0) continue;
+            const std::string exe_name = "/PoppyCoopLauncher.exe";
+            if (g_latest_exe.empty() && url.size() > exe_name.size() && url.substr(url.size() - exe_name.size()) == exe_name)
+                g_latest_exe.assign(url.begin(), url.end());
+            else if (g_latest_zip.empty() && url.size() > 4 && url.substr(url.size() - 4) == ".zip")
                 g_latest_zip.assign(url.begin(), url.end());
-                break;
-            }
         }
     }
     if (q) WinHttpCloseHandle(q);
@@ -704,26 +739,52 @@ static bool run_wait(const std::wstring& cmdline, DWORD ms) {
 }
 // self-update: download the release zip, unpack it with Windows' tar (Windows 10 1803+), swap the exe.
 // Returns the path of the new exe that is now in place, or "" (the caller then opens the release page).
-static std::wstring self_update(const std::wstring& zip_url) {
+static bool is_pe_exe(const std::wstring& f) {
+    std::string head;
+    if (!read_file(f, head) || head.size() < 1024 * 1024) return false;
+    return head[0] == 'M' && head[1] == 'Z';
+}
+// unpack the release zip with Windows' tar (Windows 10 1803+) and find PoppyCoopLauncher.exe in it: at the top
+// or in its one folder ("PoppyCoop_Launcher_1.5.6\\"). neu/src get the exe and the folder it is in.
+static bool exe_from_zip(const std::wstring& zip_url, const std::wstring& dir, const wchar_t* sys, std::wstring& neu, std::wstring& src) {
+    std::wstring zip = dir + L".zip";
+    if (zip_url.empty() || !http_download(zip_url, zip)) return false;
+    std::wstring tar = std::wstring(sys) + L"\\tar.exe";
+    if (GetFileAttributesW(tar.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    if (!run_wait(L"\"" + tar + L"\" -xf \"" + zip + L"\" -C \"" + dir + L"\"", 60000)) return false;
+    if (GetFileAttributesW(neu.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    WIN32_FIND_DATAW fd;
+    HANDLE fh = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (fh == INVALID_HANDLE_VALUE) return false;
+    bool found = false;
+    do {
+        std::wstring n = fd.cFileName;
+        if (n == L"." || n == L".." || !(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        std::wstring cand = dir + L"\\" + n + L"\\PoppyCoopLauncher.exe";
+        if (GetFileAttributesW(cand.c_str()) != INVALID_FILE_ATTRIBUTES) { src = dir + L"\\" + n; neu = cand; found = true; }
+    } while (!found && FindNextFileW(fh, &fd));
+    FindClose(fh);
+    return found;
+}
+static std::wstring self_update(const std::wstring& zip_url, const std::wstring& exe_url = L"") {
     wchar_t tmp[MAX_PATH], self[MAX_PATH], sys[MAX_PATH];
     if (!GetTempPathW(MAX_PATH, tmp) || !GetModuleFileNameW(nullptr, self, MAX_PATH) || !GetSystemDirectoryW(sys, MAX_PATH)) return L"";
     std::wstring dir = std::wstring(tmp) + L"PoppyCoopUpdate";
-    std::wstring zip = dir + L".zip";
     run_wait(L"cmd.exe /c rmdir /s /q \"" + dir + L"\"", 15000);
     CreateDirectoryW(dir.c_str(), nullptr);
-    if (!http_download(zip_url, zip)) return L"";
-    std::wstring tar = std::wstring(sys) + L"\\tar.exe";
-    if (GetFileAttributesW(tar.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
-    if (!run_wait(L"\"" + tar + L"\" -xf \"" + zip + L"\" -C \"" + dir + L"\"", 60000)) return L"";
-    std::wstring neu = dir + L"\\PoppyCoopLauncher.exe";
-    if (GetFileAttributesW(neu.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+    std::wstring src = dir, neu = dir + L"\\PoppyCoopLauncher.exe";
+    // the bare exe (works everywhere, also under Wine/Proton which has no tar.exe), else the zip
+    if (exe_url.empty() || !http_download(exe_url, neu) || !is_pe_exe(neu)) {
+        DeleteFileW(neu.c_str());
+        if (!exe_from_zip(zip_url, dir, sys, neu, src)) return L"";
+    }
     std::wstring me = self, old = me + L".old";
     DeleteFileW(old.c_str());
     if (!MoveFileExW(me.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING)) return L"";
     if (!CopyFileW(neu.c_str(), me.c_str(), FALSE)) { MoveFileExW(old.c_str(), me.c_str(), MOVEFILE_REPLACE_EXISTING); return L""; }
     // the readmes next to the exe too
     std::wstring folder = me.substr(0, me.find_last_of(L"\\") + 1);
-    for (const wchar_t* f : { L"README_PLAYERS.txt", L"LIESMICH.txt" }) CopyFileW((dir + L"\\" + f).c_str(), (folder + f).c_str(), FALSE);
+    for (const wchar_t* f : { L"README_PLAYERS.txt", L"LIESMICH.txt" }) CopyFileW((src + L"\\" + f).c_str(), (folder + f).c_str(), FALSE);
     return me;
 }
 

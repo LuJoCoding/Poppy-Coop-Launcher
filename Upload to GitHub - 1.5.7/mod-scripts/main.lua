@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.5.6"   -- 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.5.7"   -- 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -140,7 +140,7 @@ local function load_config()
     end
     f:close()
     -- test launchers can give each game window its own identity (several games share one config.txt)
-    for k, env in pairs({ name = "POPPYCOOP_NAME", room = "POPPYCOOP_ROOM", color = "POPPYCOOP_COLOR" }) do
+    for k, env in pairs({ name = "POPPYCOOP_NAME", room = "POPPYCOOP_ROOM", color = "POPPYCOOP_COLOR", tag = "POPPYCOOP_TAG" }) do
         local v = os and os.getenv and os.getenv(env)
         if v and v ~= "" then Config[k] = v end
     end
@@ -158,12 +158,11 @@ local function load_config()
     Config.name = tostring(Config.name):gsub("[^%w_%-]", "_"):sub(1, 24)
     -- launcher "Speedrun mode": only what a run needs is shared (doors/switches/puzzles, inventory, hands,
     -- checkpoints), everything costly or distracting is off, performance mode on
+    -- (the launcher sets the switches when speedrun mode is turned on; what the player then changes there wins,
+    -- so only the settings the launcher has no switch for are set here)
     if Config.speedrun == true then
-        local SPEEDRUN = { sync_activations = true, sync_inventory = true, sync_hands = true, sync_levels = true,
-            sync_destroy = false, sync_physics = false, bg_levels = false, respawn_at_friend = false,
-            hard_mode = false, sync_huggy = false, fps60 = false, low_gfx = true, footsteps = false, boost = false,
-            share_checkpoints = true }
-        for k, v in pairs(SPEEDRUN) do Config[k] = v end
+        local SPEEDRUN = { footsteps = false, boost = false, share_checkpoints = true }
+        for k, v in pairs(SPEEDRUN) do if Config[k] == nil then Config[k] = v end end
     end
     local hs = normalize_server(Config.host_ip)
     if hs then Config.host_ip = hs
@@ -314,6 +313,10 @@ local function late(fn, label)
     Late.jobs[#Late.jobs + 1] = { fn, label }
 end
 local function late_run()
+    -- the crosshair widget can tick in a NEW world (respawn / Load Game) before the player tick has noticed
+    -- it: queued jobs hold objects of the old world - drop them, and clear every cache first
+    local G0 = _G.PoppyCoop and _G.PoppyCoop.Game        -- (Game is declared further down in this file)
+    if G0 and G0.world_check and not G0.world_check() then Late.jobs = {}; return end
     Late.runs = (Late.runs or 0) + 1
     local c0 = os.clock()
     local jobs = Late.jobs
@@ -359,13 +362,20 @@ local function on_line(line)
     elseif k == "R" then
         local id, payload = line:match("^R (%d+) (.*)$")
         id = tonumber(id)
-        local kind, rest = payload:match("^(%S+)%s?(.*)$")
-        Net.rec_add(("%.2f R %s %s"):format(game_time, tostring(id), payload:sub(1, 200)))
-        local h = kind and Handlers.event[kind]
-        if h then
-            crumb("event " .. tostring(kind) .. " " .. tostring(rest):sub(1, 80))
-            local ok, err = pcall(h, id, rest)
-            if not ok then log("event %s failed: %s", kind, tostring(err)) end
+        local parts = { payload }
+        if payload:sub(1, 5) == "bulk " then
+            parts = {}
+            for part in (payload:sub(6) .. "\30"):gmatch("([^\30]*)\30") do parts[#parts + 1] = part end
+        end
+        for _, pl in ipairs(parts) do
+            local kind, rest = pl:match("^(%S+)%s?(.*)$")
+            Net.rec_add(("%.2f R %s %s"):format(game_time, tostring(id), pl:sub(1, 200)))
+            local h = kind and Handlers.event[kind]
+            if h then
+                crumb("event " .. tostring(kind) .. " " .. tostring(rest):sub(1, 80))
+                local ok, err = pcall(h, id, rest)
+                if not ok then log("event %s failed: %s", kind, tostring(err)) end
+            end
         end
     elseif k == "J" then
         crumb("join " .. line:sub(1, 60))
@@ -384,13 +394,49 @@ local function on_line(line)
     end
 end
 
+-- The helper (PoppyCoopNet.exe, no source) keeps unacknowledged reliable messages in a small queue per link;
+-- when it is full it DROPS everything after that ("reliable queue full" in net_*.log). A (re)join made every
+-- module send its whole history at once (hundreds of poses, props, ledger events), which overflowed it and
+-- lost doors/levers/items for good. So messages are packed: consecutive messages to the same target go into
+-- one "bulk" message (up to BULK_BYTES, parts separated by \30), and at most BULK_PER_POLL go out per poll -
+-- the rest waits for the next poll, in order.
+Net.BULK_BYTES, Net.BULK_PER_POLL, Net.BULK_SEP = 1400, 3, "\30"     -- (main.lua is at Lua's 200-locals limit)
+function Net.pack_outbox()
+    local BULK_BYTES, BULK_PER_POLL, BULK_SEP = Net.BULK_BYTES, Net.BULK_PER_POLL, Net.BULK_SEP
+    local out, i, n = {}, 1, #Net.outbox
+    while i <= n and #out < BULK_PER_POLL do
+        local line = Net.outbox[i]
+        local head, body = line:match("^(R) (.*)$")
+        if not head then head, body = line:match("^(D %d+) (.*)$") end
+        if not head or #line > BULK_BYTES or body:find(BULK_SEP, 1, true) then
+            out[#out + 1] = line; i = i + 1
+        else
+            local parts, size = { body }, #body
+            i = i + 1
+            while i <= n do
+                local l2 = Net.outbox[i]
+                if l2:sub(1, #head + 1) ~= head .. " " then break end
+                local b2 = l2:sub(#head + 2)
+                if b2:find(BULK_SEP, 1, true) or size + #b2 + 1 > BULK_BYTES then break end
+                parts[#parts + 1] = b2; size = size + #b2 + 1
+                i = i + 1
+            end
+            out[#out + 1] = #parts == 1 and line or (head .. " bulk " .. table.concat(parts, BULK_SEP))
+        end
+    end
+    local rest = {}
+    for k = i, n do rest[#rest + 1] = Net.outbox[k] end
+    Net.outbox = rest
+    if #rest > 2000 then log("network: %d messages waiting to be sent", #rest) end
+    return out
+end
+
 -- One synchronous round trip with the helper. state_line may be nil.
 local function net_poll(state_line)
     if not Net.connected then return end
     local ok, err = pcall(function()
         if state_line then Net.up:write("S ", state_line, "\n") end
-        for i = 1, #Net.outbox do Net.up:write(Net.outbox[i], "\n") end
-        Net.outbox = {}
+        for _, l in ipairs(Net.pack_outbox()) do Net.up:write(l, "\n") end
         Net.up:write("POLL\n")
         Net.up:flush()
         for _ = 1, 10000 do
@@ -421,7 +467,13 @@ function Coop.on(kind, fn) Handlers.event[kind] = fn end
 function Coop.is_host()
     if Config.mode == "host" then return true end
     if Net.myid < 0 then return false end
-    for id in pairs(Net.players) do if id < Net.myid then return false end end
+    -- only players whose game is really there count: after a crash the dead game's connection lingers in the
+    -- room for ~30 s (same name, no state updates). With it as the "lead", nobody sent the world history to
+    -- the player who came back, and everything done before was missing for them.
+    for id, pl in pairs(Net.players) do
+        local alive = pl.state_time and game_time - pl.state_time < 3
+        if id < Net.myid and alive and pl.name ~= Config.name then return false end
+    end
     return true
 end
 function Coop.active() return Net.connected and Net.myid >= 0 end
@@ -2970,6 +3022,16 @@ function world_unloading()
     for _, h in ipairs(Handlers.unload) do pcall(h) end
     log("level loading: cleared cached objects")
 end
+-- same check as the player tick, for code that runs outside it (late queue): false = the world changed
+Game.world_check = function()
+    local w = SafeUE.world()
+    local wa = w and try(function() return tostring(w:GetAddress()) end)
+    if wa and Game.world_addr and wa ~= Game.world_addr then
+        world_unloading(); Game.loading = false; Game.world_addr = wa
+        return false
+    end
+    return true
+end
 -- NOTE: RegisterLoadMapPreHook crashes this game on startup with UE4SS 3.0.1, so it is NOT used.
 -- Instead we notice the new world when the new player spawns (nothing ticks during a level load).
 
@@ -3142,19 +3204,36 @@ local function ver_popup(msg)
     local P2 = _G.PoppyCoop
     if P2 and P2.popup then pcall(P2.popup, msg, "warn") end
 end
--- remember who you played with in which room (the launcher shows "Played with: ..." next to recent codes)
-table.insert(Handlers.join, function(id, name)
+-- remember who you played with in which room (the launcher's friends page / "Played with: ..." reads it).
+-- "<ROOM>\t<name>#<tag>" - the tag is the player's friend-code number (launcher, config tag=), told on join;
+-- players with an older mod have none ("<ROOM>\t<name>").
+function Net.remember_player(name, tag)
     name = tostring(name or ""):gsub("[^%w_%-]", "")
     local room = tostring(Config.room or ""):upper():gsub("[^%w]", "")
-    if name == "" or room == "" or id >= 900 then return end
+    if name == "" or room == "" then return end
+    local who = name .. ((tag and tostring(tag):match("^%d%d%d%d%d$")) and ("#" .. tag) or "")
     local fn = MOD_DIR .. "\\recent_players.txt"
-    local lines, seen = {}, room .. "\t" .. name
+    local lines, seen = {}, room .. "\t" .. who
+    local untagged = room .. "\t" .. name
     local f = io.open(fn, "r")
-    if f then for l in f:lines() do if l ~= seen and l:find("\t", 1, true) then lines[#lines + 1] = l end end; f:close() end
+    if f then for l in f:lines() do if l ~= seen and l ~= untagged and l:find("\t", 1, true) then lines[#lines + 1] = l end end; f:close() end
     lines[#lines + 1] = seen
     while #lines > 60 do table.remove(lines, 1) end
     f = io.open(fn, "w")
     if f then f:write(table.concat(lines, "\n"), "\n"); f:close() end
+end
+table.insert(Handlers.join, function(id, name)
+    if id >= 900 then return end
+    Net.remember_player(name, nil)
+    local my = tostring(Config.tag or ""):match("^%d%d%d%d%d$")
+    if my then Coop.send_to(id, "tag", my) end
+end)
+Coop.on("tag", function(from, t)
+    t = tostring(t or ""):match("^(%d%d%d%d%d)$")
+    local pl = Net.players[from]
+    if not t or not pl or from >= 900 then return end
+    pl.tag = t
+    Net.remember_player(pl.name, t)
 end)
 table.insert(Handlers.join, function(id, name)
     Coop.send_to(id, "ver", VERSION)
