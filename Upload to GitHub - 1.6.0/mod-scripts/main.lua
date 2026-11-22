@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.5.9"   -- 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.6.0"   -- 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -91,6 +91,28 @@ for _, cand in ipairs({ "ue4ss\\Mods\\PoppyCoop", "Mods\\PoppyCoop", "..\\Mods\\
     if f then f:close(); MOD_DIR = cand; break end
 end
 MOD_DIR = MOD_DIR or "ue4ss\\Mods\\PoppyCoop"
+
+------------------------------------------------- started by the PoppyCoop launcher?
+-- The mod only runs when the launcher started the game: right before a start it writes the time (unix seconds)
+-- into launch.txt ("always" = launcher setting "Co-op without the launcher"). Started from Steam or the exe
+-- directly, the game stays normal - other UE4SS mods keep working. Several windows / test scripts pass env vars.
+local LAUNCH_MAX_AGE = 600     -- seconds between the launcher's PLAY and this script loading (Steam can be slow)
+local function started_by_launcher()
+    if os.getenv and (os.getenv("POPPYCOOP_NAME") or os.getenv("POPPYCOOP_INSTANCE") or os.getenv("POPPYCOOP_ALWAYS")) then return true end
+    local src = tostring(debug and debug.getinfo and debug.getinfo(1, "S").source or "")
+    if src:lower():match("[\\/]instance%d+[\\/]") then return true end   -- Nucleus Co-op copy
+    local f = io.open(MOD_DIR .. "\\launch.txt", "r")
+    if not f then return false end
+    local line = f:read("*l") or ""
+    f:close()
+    if line:match("^%s*always") then return true end
+    local t = tonumber(line:match("%d+"))
+    return t ~= nil and os.time and math.abs(os.time() - t) <= LAUNCH_MAX_AGE
+end
+if not started_by_launcher() then
+    print("[PoppyCoop] v" .. VERSION .. " is OFF: the game was not started with the PoppyCoop launcher (start it with PLAY in the launcher to play co-op)\n")
+    return
+end
 
 --------------------------------------------------------------------- config
 local Config = { mode = "off", host_ip = "127.0.0.1", port = 27777, name = "Player", room = "public", autostart_helper = true,
@@ -181,6 +203,7 @@ end
 
 -------------------------------------------------------------------- network
 local Net = {
+    gone = {},              -- id -> game_time it left (late state lines of it are ignored for a while)
     up = nil, down = nil, connected = false, launched_at = -100, last_try = -100,
     myid = -1, status = "offline", npeers = 0, rtt = -1,
     outbox = {},          -- reliable lines queued for next poll
@@ -354,6 +377,8 @@ local function on_line(line)
     elseif k == "S" then
         local id, payload = line:match("^S (%d+) (.*)$")
         id = tonumber(id)
+        -- a late state line of a player who just left must not bring them back as a figure nobody removes
+        if id and Net.gone[id] and game_time - Net.gone[id] < 15 then id = nil end
         if id then
             local p = Net.players[id] or { name = "P" .. id }
             Net.players[id] = p
@@ -381,6 +406,16 @@ local function on_line(line)
         crumb("join " .. line:sub(1, 60))
         local id, name = line:match("^J (%d+) (.*)$")
         id = tonumber(id)
+        Net.gone[id] = nil
+        -- the same player again under a new id (connection dropped and came back): the old entry is a ghost
+        for oid, op in pairs(Net.players) do
+            if oid ~= id and oid < 900 and op.name == name and game_time - (op.state_time or 0) > 3 then
+                log("%s rejoined (id %d -> %d): old figure removed", name, oid, id)
+                for _, h in ipairs(Handlers.leave) do pcall(h, oid) end
+                Net.players[oid] = nil
+                Net.gone[oid] = game_time
+            end
+        end
         Net.players[id] = Net.players[id] or {}
         Net.players[id].name = name
         log("%s joined (id %d)", name, id)
@@ -391,6 +426,7 @@ local function on_line(line)
         log("%s left", p and p.name or tostring(id))
         for _, h in ipairs(Handlers.leave) do pcall(h, id) end
         Net.players[id] = nil
+        if id then Net.gone[id] = game_time end
     end
 end
 
@@ -3235,25 +3271,38 @@ Coop.on("tag", function(from, t)
     pl.tag = t
     Net.remember_player(pl.name, t)
 end)
+-- (VerCheck.told[name]: warned once per player per session - a shaky connection rejoins often)
+VerCheck.told = {}
 table.insert(Handlers.join, function(id, name)
     Coop.send_to(id, "ver", VERSION)
     VerCheck[id] = { at = game_time, name = name }
 end)
+-- "verq": "tell me your version" - sent when no "ver" came (it can get lost when the connection drops)
+Coop.on("verq", function(from) if from < 900 then Coop.send_to(from, "ver", VERSION) end end)
 table.insert(Handlers.leave, function(id) VerCheck[id] = nil end)
 Coop.on("ver", function(from, v)
     v = tostring(v or ""):match("^[%w%.]+") or "?"
     local c = VerCheck[from] or {}
     c.got = v
     VerCheck[from] = c
-    if v ~= VERSION then
-        local pl = Net.players[from]
+    local pl = Net.players[from]
+    local key = (pl and pl.name or "?") .. "=" .. v
+    if v ~= VERSION and not VerCheck.told[key] then
+        VerCheck.told[key] = true
         ver_popup(("%s has mod v%s, you have v%s - update so both use the same launcher version!"):format(pl and pl.name or "A player", v, VERSION))
     end
 end)
 table.insert(Handlers.tick, function()
     for id, c in pairs(VerCheck) do
-        if not c.got and not c.told and game_time - (c.at or game_time) > 15 and id ~= BUDDY_ID and id ~= PLAY_ID then
+        if type(id) == "number" and not c.got and not c.asked and game_time - (c.at or game_time) > 8 and id ~= BUDDY_ID and id ~= PLAY_ID then
+            c.asked = true
+            Coop.send_to(id, "verq", "")
+            Coop.send_to(id, "ver", VERSION)
+        end
+        if type(id) == "number" and not c.got and not c.told and game_time - (c.at or game_time) > 25 and id ~= BUDDY_ID and id ~= PLAY_ID
+           and Net.players[id] and not VerCheck.told[tostring(c.name)] then
             c.told = true
+            VerCheck.told[tostring(c.name)] = true
             ver_popup(("%s has an older mod version (before 1.4.8) - update so both use the same launcher version!"):format(c.name or "A player"))
         end
     end

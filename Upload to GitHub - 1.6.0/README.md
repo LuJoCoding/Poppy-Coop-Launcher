@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.5.9.zip`**
+Download **`PoppyCoop_Launcher_1.6.0.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,13 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.0
+- **The co-op mod is only active when you start the game with PLAY in the launcher.** Started from Steam or the game's exe, Poppy Playtime is completely normal again - handy for solo runs. Other UE4SS mods keep working.
+- New launcher setting **"Co-op without the launcher"**: turns co-op on for Steam starts too - for the Steam Deck game mode.
+- **Logs page:** long logs can be scrolled now (mouse wheel over the log, Page Up / Page Down, Home / End) - the whole session, not only its end.
+- **Fixed: a player could show up twice** after their connection dropped and came back (the old figure stayed). Late position updates of a player who left are ignored now, and a player who rejoins replaces their old figure.
+- **Fixed: "X has an older mod version (before 1.4.8)" spam** on shaky connections. The mod asks for the version again before warning, and warns only once per player.
 
 ### 1.5.9
 - **Linux & Steam Deck: AppImage.** Download `PoppyCoop_Launcher.AppImage`, make it executable and double-click it. It finds Steam and Proton by itself and runs the launcher like a normal app. Games start exactly like from Steam.

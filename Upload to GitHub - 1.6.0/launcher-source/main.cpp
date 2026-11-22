@@ -135,6 +135,8 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Set up  \x203A", L"Einrichten  \x203A" },
         { L"Settings", L"Einstellungen" },
         { L"Logs", L"Logs" },
+        { L"Co-op without the launcher", L"Koop auch ohne Launcher" },
+        { L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", L"Auch wenn das Spiel über Steam gestartet wird (z. B. Steam-Deck-Spielmodus). Aus: nur über SPIELEN hier." },
         { L"WHAT'S NEW", L"WAS IST NEU" },
         { L"All releases on GitHub", L"Alle Versionen auf GitHub" },
         { L"PoppyCoop_report.zip is in the launcher folder - send it to us.", L"PoppyCoop_report.zip liegt im Launcher-Ordner - schick sie uns." },
@@ -149,10 +151,10 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Your last game sessions. Crashed ones are red - send us the report zip or copy the log into Discord.", L"Deine letzten Spielsitzungen. Abgestürzte sind rot - schick uns die Bericht-Zip oder kopier das Log in Discord." },
         { L"No logs yet - they show up here after you played this chapter once.", L"Noch keine Logs - sie erscheinen hier, sobald du dieses Kapitel einmal gespielt hast." },
         { L"Crashed", L"Abgestürzt" },
-        { L"  -  arrow keys / click to scroll", L"  -  Pfeiltasten / Mausrad" },
+        { L"  -  arrow keys / click", L"  -  Pfeiltasten / Klick" },
         { L"LIVE LOG", L"LIVE-LOG" },
         { L"CRASH", L"ABSTURZ" },
-        { L"END OF THE LOG", L"ENDE DES LOGS" },
+        { L"GAME LOG", L"SPIEL-LOG" },
         { L"Copy for Discord", L"Für Discord kopieren" },
         { L"Copied - paste it in Discord (Ctrl+V).", L"Kopiert - in Discord einfügen (Strg+V)." },
         { L"Report zip", L"Bericht-Zip" },
@@ -364,30 +366,30 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
-    { false, L"Linux & Steam Deck: AppImage",
+    { false, L"Co-op only when started here",
+      L"The mod is only active when you start the game with PLAY in this launcher. Started from Steam, the game is normal (other UE4SS mods still work). Launcher settings: \"Co-op without the launcher\" turns it on for Steam starts too (Steam Deck game mode).",
+      L"Koop nur beim Start von hier",
+      L"Der Mod ist nur aktiv, wenn du das Spiel mit SPIELEN in diesem Launcher startest. Über Steam gestartet ist das Spiel normal (andere UE4SS-Mods laufen weiter). Launcher-Einstellungen: \"Koop auch ohne Launcher\" schaltet ihn auch für Steam-Starts ein (Steam-Deck-Spielmodus)." },
+    { false, L"Scroll through long logs",
+      L"On the Logs page the whole session can be read now: mouse wheel over the log, Page Up / Page Down, Home / End.",
+      L"Lange Logs scrollen",
+      L"Auf der Logs-Seite kann man jetzt die ganze Sitzung lesen: Mausrad über dem Log, Bild hoch / runter, Pos1 / Ende." },
+    { true, L"1.5.9: Linux & Steam Deck: AppImage",
       L"PoppyCoop_Launcher.AppImage is on GitHub now. Make it executable and double-click it - it finds Steam and Proton by itself.",
-      L"Linux & Steam Deck: AppImage",
+      L"1.5.9: Linux & Steam Deck: AppImage",
       L"Auf GitHub gibt es jetzt PoppyCoop_Launcher.AppImage. Ausführbar machen, doppelklicken - sie findet Steam und Proton selbst." },
-    { false, L"Proper window bar on Linux",
+    { true, L"1.5.9: Proper window bar on Linux",
       L"Under Proton the launcher draws its own dark title bar instead of the old Windows 95 one: drag to move, double-click to maximize, resize at the edges.",
-      L"Richtige Fensterleiste unter Linux",
+      L"1.5.9: Richtige Fensterleiste unter Linux",
       L"Unter Proton zeichnet der Launcher seine eigene dunkle Titelleiste statt der alten Windows-95-Leiste: ziehen zum Verschieben, Doppelklick zum Maximieren, Ränder zum Vergrößern." },
-    { false, L"Report zip works on Linux",
+    { true, L"1.5.9: Report zip works on Linux",
       L"\"Report zip\" on the Logs page works everywhere now - under Wine / Proton it didn't. On Linux the zip is saved in the launcher folder.",
-      L"Bericht-Zip geht unter Linux",
+      L"1.5.9: Bericht-Zip geht unter Linux",
       L"\"Bericht-Zip\" auf der Logs-Seite geht jetzt überall - unter Wine / Proton ging es nicht. Unter Linux landet die Zip im Launcher-Ordner." },
-    { false, L"This page",
-      L"What's new is a real page in the launcher now instead of a message box.",
-      L"Diese Seite",
-      L"Was ist neu ist jetzt eine richtige Seite im Launcher statt einem Meldungsfenster." },
     { true, L"1.5.8: Logs page",
       L"Every chapter has a Logs page (next to Settings): your last sessions with time, length and errors, crashed ones in red. Chapter 2 is out of beta.",
       L"1.5.8: Logs-Seite",
       L"Jedes Kapitel hat eine Logs-Seite (neben Einstellungen): deine letzten Sitzungen mit Zeit, Dauer und Fehlern, abgestürzte in Rot. Kapitel 2 ist keine Beta mehr." },
-    { true, L"1.5.7: sync fixes",
-      L"Doors, levers, items and checkpoints keep syncing after connection hiccups, no crashes after respawn / Load Game, Chapter 1 shares checkpoints, keys and doors, Speedrun mode, automatic updates.",
-      L"1.5.7: Sync-Fixes",
-      L"Türen, Hebel, Gegenstände und Checkpoints bleiben nach Verbindungsaussetzern synchron, keine Abstürze nach Respawn / Spiel laden, Kapitel 1 teilt Checkpoints, Schlüssel und Türen, Speedrun-Modus, Auto-Updates." },
 };
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
 
@@ -412,6 +414,27 @@ static bool g_running[8] = {};
 static Page g_news_back = Page::Chapter;      // page to go back to from the news page
 static std::vector<LogEntry> g_logs;         // Logs page: sessions + crashes of the selected chapter (read when opened)
 static int g_log_sel = 0;
+static int g_log_scroll = 0;                 // log preview: lines scrolled up from the end
+static int g_log_page = 1;                   // log preview: lines that fit
+static RECT g_log_view = {};                 // log preview area (pixels, page coordinates) - the wheel scrolls the log there
+// scroll bar of the log preview (pixels, page coordinates) - can be dragged
+static RECT g_log_track = {};                // whole bar (wider than drawn, easier to hit)
+static int g_log_thumb_top = 0, g_log_thumb_h = 0, g_log_total = 0;
+static bool g_log_drag = false;
+static int g_log_grab = 0;                   // where the thumb was grabbed (pixels from its top)
+static void log_drag_to(int y) {
+    int th = g_log_track.bottom - g_log_track.top, room = g_log_page, range = g_log_total - room;
+    if (range <= 0 || th <= g_log_thumb_h) return;
+    int pos = y - g_log_track.top - g_log_grab;
+    int firstl = (int)((long long)pos * range / (th - g_log_thumb_h) + 0.5);
+    firstl = std::max(0, std::min(range, firstl));
+    g_log_scroll = range - firstl;
+}
+static void log_select(int i) { g_log_sel = i; g_log_scroll = 0; }
+static void log_scroll(int d) {
+    int mx = g_logs.empty() ? 0 : std::max(0, (int)g_logs[std::min(g_log_sel, (int)g_logs.size() - 1)].tail.size() - g_log_page);
+    g_log_scroll = std::max(0, std::min(mx, g_log_scroll + d));
+}
 static int g_capture = -1;                   // key row waiting for a key press (settings page)
 static bool g_confirm_uninstall = false;
 static std::wstring g_edit_name;             // profile page buffer
@@ -1445,7 +1468,7 @@ static void draw_settings(int h) {
 // ------------------------------------------------------------------ logs page (last sessions + crash reports of a chapter)
 static void open_logs() {
     g_logs = scan_logs(cur(), g_running[g_sel]);
-    g_log_sel = 0;
+    log_select(0);
     g_page = Page::Logs; g_focus = {}; g_capture = -1; g_confirm_uninstall = false;
 }
 
@@ -1496,11 +1519,11 @@ static void draw_logs(int h) {
         text(R(MX + 32, y + 7, LW - 44, 20), log_title(e), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         std::wstring sub = !e.crash_dir.empty() && !e.path.empty() ? tr(L"Crashed") + L"  -  " + log_sub(e) : log_sub(e);
         text(R(MX + 32, y + 28, LW - 44, 18), sub, F_SMALL, !e.crash_dir.empty() ? C_BAD : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        click(r, [i] { g_log_sel = i; });
+        click(r, [i] { log_select(i); });
     }
     if ((int)g_logs.size() > fit) {
         int y = top + fit * (RH + 6) - 2;
-        text(R(MX, y, LW, 18), std::to_wstring(g_log_sel + 1) + L" / " + std::to_wstring(g_logs.size()) + tr(L"  -  arrow keys / click to scroll"), F_SMALL, C_DIM, DT_CENTER | DT_SINGLELINE);
+        text(R(MX, y, LW, 18), std::to_wstring(g_log_sel + 1) + L" / " + std::to_wstring(g_logs.size()) + tr(L"  -  arrow keys / click"), F_SMALL, C_DIM, DT_CENTER | DT_SINGLELINE);
     }
 
     if (g_log_sel >= (int)g_logs.size()) g_log_sel = 0;
@@ -1509,7 +1532,7 @@ static void draw_logs(int h) {
     RECT pc = R(PX, top, PW, PH);
     fill(pc, C_CARD, 14);
     int y = top + 14;
-    text(R(PX + 18, y, PW - 36, 18), e.running ? tr(L"LIVE LOG") : !e.crash_dir.empty() ? tr(L"CRASH") : tr(L"END OF THE LOG"), F_SMALL, !e.crash_dir.empty() ? C_BAD : acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(PX + 18, y, PW - 36, 18), e.running ? tr(L"LIVE LOG") : !e.crash_dir.empty() ? tr(L"CRASH") : tr(L"GAME LOG"), F_SMALL, !e.crash_dir.empty() ? C_BAD : acc_text(), DT_LEFT | DT_SINGLELINE);
     y += 24;
     const int LH = 17, bottom = top + PH - 96;
     if (!e.crash_msg.empty()) {
@@ -1523,13 +1546,30 @@ static void draw_logs(int h) {
         }
         y += 8;
     }
-    // last log lines, as many as fit
-    int room = std::max(0, (bottom - y) / LH);
-    size_t n = std::min((size_t)room, e.tail.size());
-    for (size_t k = e.tail.size() - n; k < e.tail.size(); k++) {
+    // log lines, as many as fit; the wheel / Page Up / Page Down scroll (g_log_scroll lines up from the end)
+    int room = std::max(1, (bottom - y) / LH);
+    g_log_page = room;
+    g_log_view = R(PX, y, PW, room * LH);
+    int total = (int)e.tail.size();
+    g_log_scroll = std::max(0, std::min(g_log_scroll, std::max(0, total - room)));
+    int last = total - g_log_scroll, firstl = std::max(0, last - room);
+    g_log_total = total;
+    g_log_track = {};
+    if (total > room) {                            // scroll bar: drag the thumb or click the bar to jump
+        int th = room * LH, bh = std::max(24, th * room / total);
+        int bt = (th - bh) * firstl / std::max(1, total - room);
+        g_log_track = R(PX + PW - 22, y, 20, th);
+        RECT tr_px = R(PX + PW - 22, y, 20, th);
+        g_log_thumb_top = tr_px.top + (int)((tr_px.bottom - tr_px.top) * (long long)bt / std::max(1, th));
+        g_log_thumb_h = (int)((tr_px.bottom - tr_px.top) * (long long)bh / std::max(1, th));
+        bool hot = g_log_drag || hover(g_log_track);
+        fill(R(PX + PW - 14, y, 6, th), mix(C_CARD, C_LINE, hot ? 0.9 : 0.6), 3);
+        fill(R(PX + PW - 14, y + bt, 6, bh), g_log_drag ? accent() : mix(C_DIM, C_TEXT, hot ? 0.5 : 0.0), 3);
+    }
+    for (size_t k = (size_t)firstl; k < (size_t)last; k++) {
         const std::string& l = e.tail[k];
         bool err = l.find("Error") != std::string::npos || l.find("traceback") != std::string::npos;
-        text(R(PX + 18, y, PW - 36, LH), wide(l), F_SMALL, err ? C_WARN : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        text(R(PX + 18, y, PW - 46, LH), wide(l), F_SMALL, err ? C_WARN : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         y += LH;
     }
     // actions
@@ -1648,6 +1688,7 @@ static void save_app_prefs() {
     ini_set(L"Launcher", L"Lang", g_lang == 1 ? L"de" : L"en");
     ini_set(L"Launcher", L"Experimental", g_experimental ? L"1" : L"0");
     ini_set(L"Launcher", L"Multi", g_multi ? L"1" : L"0");
+    ini_set(L"Launcher", L"CoopAlways", g_coop_always ? L"1" : L"0");
     ini_set(L"Launcher", L"AutoUpdate", g_autoupd ? L"1" : L"0");
     if (g_crashrep >= 0) ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
 }
@@ -1727,7 +1768,15 @@ static void draw_app(int h) {
     row(410, 0, L"Animations", L"Smooth fades and movements. Turn off on very slow PCs.", g_anims, [] { g_anims = !g_anims; save_app_prefs(); });
     row(470, 1, L"Experimental chapters", L"Try Chapters 3-5: you see each other, but doors, puzzles and items aren't shared.", g_experimental, [] { set_experimental(!g_experimental); });
     row(530, 2, L"Several games at once", L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
-    if (FEATURE_ONLINE) row(650, 4, L"Send crash reports", L"After a crash, send the error and the mod log to the developers (no user names).", g_crashrep == 1, [] { g_crashrep = g_crashrep == 1 ? 0 : 1; save_app_prefs(); if (g_crashrep == 1) maybe_report_crashes(); });
+    row(650, 5, L"Co-op without the launcher", L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", g_coop_always, [] {
+        g_coop_always = !g_coop_always; save_app_prefs();
+        for (auto& ch : g_ch) if (!inst_ver(ch).empty()) write_launch_mark(ch);   // "always" / back to a stale time
+        if (!g_coop_always) for (auto& ch : g_ch) if (!inst_ver(ch).empty() && !game_running(ch)) {
+            HANDLE f = CreateFileW((mod_dir(ch) + L"\\launch.txt").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+            if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, "0\n", 2, &w, nullptr); CloseHandle(f); }
+        }
+    });
+    if (FEATURE_ONLINE) row(710, 4, L"Send crash reports", L"After a crash, send the error and the mod log to the developers (no user names).", g_crashrep == 1, [] { g_crashrep = g_crashrep == 1 ? 0 : 1; save_app_prefs(); if (g_crashrep == 1) maybe_report_crashes(); });
     row(590, 3, L"Automatic updates", L"Install a new version by itself when the launcher starts.", g_autoupd, [] { g_autoupd = !g_autoupd; save_app_prefs(); if (g_autoupd) maybe_auto_update(); });
     (void)h;
 }
@@ -2453,6 +2502,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_EXITSIZEMOVE: save_window_size(); return 0;
     case WM_MOUSEMOVE: {
         g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
+        if (g_log_drag) log_drag_to(g_mouse.y);
         TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, h, 0 }; TrackMouseEvent(&t);
         InvalidateRect(h, nullptr, FALSE);
         return 0;
@@ -2466,6 +2516,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         break;
     case WM_LBUTTONDOWN: {
         g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
+        if (g_page == Page::Logs && g_log_track.bottom > g_log_track.top && PtInRect(&g_log_track, g_mouse)) {
+            bool on_thumb = g_mouse.y >= g_log_thumb_top && g_mouse.y < g_log_thumb_top + g_log_thumb_h;
+            g_log_grab = on_thumb ? g_mouse.y - g_log_thumb_top : g_log_thumb_h / 2;   // bar outside the thumb: jump there
+            g_log_drag = true;
+            log_drag_to(g_mouse.y);
+            SetCapture(h);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
         g_pressed = -1;
         for (int i = (int)g_hits.size() - 1; i >= 0; i--) if (hover(g_hits[i].r)) { g_pressed = i; break; }
         if (g_pressed < 0) { g_focus = {}; g_capture = -1; }
@@ -2475,6 +2534,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP: {
         ReleaseCapture();
+        if (g_log_drag) { g_log_drag = false; g_pressed = -1; InvalidateRect(h, nullptr, FALSE); return 0; }
         g_mouse = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) - bar_h() };
         if (g_pressed >= 0 && g_pressed < (int)g_hits.size() && hover(g_hits[g_pressed].r)) {
             auto fn = g_hits[g_pressed].fn;   // copy: the handler may change the page
@@ -2486,14 +2546,25 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSEWHEEL:
         if (g_page == Page::Logs && !g_logs.empty()) {
-            g_log_sel = std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (GET_WHEEL_DELTA_WPARAM(wp) < 0 ? 1 : -1)));
+            POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            ScreenToClient(h, &p);
+            p.y -= bar_h();
+            int notches = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+            if (!notches) notches = GET_WHEEL_DELTA_WPARAM(wp) < 0 ? -1 : 1;
+            if (PtInRect(&g_log_view, p)) log_scroll(notches * 3);     // over the log: 3 lines per notch
+            else log_select(std::max(0, std::min((int)g_logs.size() - 1, g_log_sel - notches)));
             InvalidateRect(h, nullptr, FALSE);
         }
         return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g_capture >= 0) { set_key((UINT)wp); InvalidateRect(h, nullptr, FALSE); return 0; }
         if (g_page == Page::Logs && !g_logs.empty() && (wp == VK_UP || wp == VK_DOWN)) {
-            g_log_sel = std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (wp == VK_DOWN ? 1 : -1)));
+            log_select(std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (wp == VK_DOWN ? 1 : -1))));
+            InvalidateRect(h, nullptr, FALSE); return 0;
+        }
+        if (g_page == Page::Logs && !g_logs.empty() && (wp == VK_PRIOR || wp == VK_NEXT || wp == VK_HOME || wp == VK_END)) {
+            const int ALL = 1 << 30;
+            log_scroll(wp == VK_PRIOR ? g_log_page - 1 : wp == VK_NEXT ? -(g_log_page - 1) : wp == VK_HOME ? ALL : -ALL);
             InvalidateRect(h, nullptr, FALSE); return 0;
         }
         if (g_focus.value && wp == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -2775,6 +2846,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     ini_init();
     g_experimental = ini_get(L"Launcher", L"Experimental", L"0") == L"1";
     g_multi = ini_get(L"Launcher", L"Multi", L"0") == L"1";
+    g_coop_always = ini_get(L"Launcher", L"CoopAlways", L"0") == L"1";
     g_autoupd = ini_get(L"Launcher", L"AutoUpdate", L"1") != L"0";
     friends_load();
     {

@@ -13,8 +13,8 @@
 static const int LOG_KEEP = 15;                                  // stored sessions per chapter
 static const ULONGLONG CRASH_MATCH = 180ULL * FT_SECOND;         // crash folder written up to 3 min after the log's end
 static const ULONGLONG CRASH_LIST_AGE = 14ULL * 24 * 3600 * FT_SECOND;   // lone crashes older than 2 weeks are hidden
-static const size_t LOG_TAIL_BYTES = 64 * 1024;                  // read from the end of a log for the preview
-static const int LOG_PREVIEW_LINES = 40;
+static const size_t LOG_TAIL_BYTES = 1024 * 1024;                // read from the end of a log for the preview (scrollable)
+static const int LOG_PREVIEW_LINES = 8000;
 
 struct LogEntry {
     std::wstring path;            // session log (empty: crash without a stored session)

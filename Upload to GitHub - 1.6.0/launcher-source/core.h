@@ -576,8 +576,23 @@ static void keep_previous_log(const Chapter& c) {
     std::wstring dir = bin_dir(c) + L"\\ue4ss\\";
     CopyFileW((dir + L"UE4SS.log").c_str(), (dir + L"UE4SS_previous.log").c_str(), FALSE);
 }
+// The co-op mod only runs when the launcher started the game: right before a start the launcher writes the time
+// (unix seconds) into <mod>\launch.txt and the mod checks it is fresh (main.lua started_by_launcher). Started from
+// Steam or the exe directly, the game stays normal. Launcher setting "Co-op without the launcher" writes "always".
+static bool g_coop_always = false;
+static std::wstring mod_dir(const Chapter& c);
+static void write_launch_mark(const Chapter& c) {
+    if (c.dir.empty() || !dir_exists(mod_dir(c))) return;
+    std::string v = g_coop_always ? "always\n" : std::to_string((long long)time(nullptr)) + "\n";
+    HANDLE f = CreateFileW((mod_dir(c) + L"\\launch.txt").c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD w = 0;
+    WriteFile(f, v.data(), (DWORD)v.size(), &w, nullptr);
+    CloseHandle(f);
+}
 static bool launch_game(const Chapter& c, int window = 0, const std::wstring& name = L"", const std::wstring& color = L"", const std::wstring& room = L"") {
     if (window == 0) keep_previous_log(c);        // (more windows of one game share the log: only the first)
+    write_launch_mark(c);
     if (window > 0 || c.experimental || !*c.appid) {
         std::wstring exe = c.dir + L"\\" + c.exe;
         std::wstring cmd = L"\"" + exe + L"\"";
