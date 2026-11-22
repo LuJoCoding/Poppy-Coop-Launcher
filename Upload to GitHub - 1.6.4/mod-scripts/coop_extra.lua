@@ -1550,6 +1550,9 @@ table.insert(Handlers.tick, function(dt, have)
         crumb("extra: alone"); pcall(alone_tick)
         return
     end
+    -- levels are being torn down / loaded (dying, teleport, area unloaded): no scans over the world's objects
+    -- and no moving of props until it is over (see P.Quiet in coop_world)
+    if P.quiet and P.quiet() then crumb("extra: popups (quiet)"); popups_tick(); return end
     crumb("extra: census")
     local cc = os.clock()
     pcall(census_step)

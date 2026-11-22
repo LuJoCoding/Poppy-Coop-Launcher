@@ -380,6 +380,14 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Fewer crashes",
+      L"Crashes after dying, respawning or teleporting to a friend (mostly Chapter 2) and after roll-up doors in Chapter 1 are fixed. Syncing no longer stops after joining.",
+      L"Weniger Abstürze",
+      L"Abstürze nach Tod, Respawn oder Teleport zum Freund (vor allem Kapitel 2) und nach Rolltoren in Kapitel 1 sind behoben. Der Abgleich hört nach dem Beitreten nicht mehr auf." },
+    { false, L"Chapter 1: scanners and code door",
+      L"Hand scanners are synced live (everyone sees the scan) and the door behind the security code opens for everyone. After New Game it stays closed.",
+      L"Kapitel 1: Scanner und Codetür",
+      L"Handscanner werden live abgeglichen (alle sehen den Scan), und die Tür hinter dem Sicherheitscode geht bei allen auf. Nach Neues Spiel bleibt sie zu." },
     { false, L"New Game starts clean",
       L"After New Game, doors that were opened before stayed open. Now a new game starts fresh - Load Game and respawns still restore everything.",
       L"Neues Spiel startet sauber",

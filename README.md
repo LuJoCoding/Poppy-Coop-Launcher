@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.6.3.zip`](Upload%20to%20GitHub%20-%201.6.3/PoppyCoop_Launcher_1.6.3.zip)**
-(folder `Upload to GitHub - 1.6.3`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.6.4.zip`](Upload%20to%20GitHub%20-%201.6.4/PoppyCoop_Launcher_1.6.4.zip)**
+(folder `Upload to GitHub - 1.6.4`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,14 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.4
+- **Fixed: crashes after dying, respawning or teleporting to a friend** (mostly Chapter 2). The mod touched game objects while the game was tearing the level down. It now stays quiet during these moments; what your friends did meanwhile is applied right after.
+- **Fixed: crashes in Chapter 1 shortly after a roll-up door opened** (both players crashed).
+- **Fixed: sometimes nothing was synced any more after joining.** A game could start treating everything its own player did as coming from a friend and stopped sending doors, codes and scanners.
+- **Chapter 1: hand scanners are synced live.** When one player puts the hand on a scanner, the other players see the same scan (charge bar, sound) and the door opens for everyone.
+- **Chapter 1: the door behind the security code opens for everyone** when one player enters the code.
+- **Fixed: after "New Game" the door behind the code stood open.** A new game now also forgets the keys and the friends' old progress (doors, items, hand) - what they do from now on still comes through.
 
 ### 1.6.3
 - **Fixed (Chapter 1): roll-up doors behind hand scanners didn't open for the other players.** When one player used the blue hand scanner (or the two-hand pad / the power room pad), the scanner turned green for everyone but the door only opened for that player. The doors themselves are synced now - however they were opened. Players who join later get them open too.

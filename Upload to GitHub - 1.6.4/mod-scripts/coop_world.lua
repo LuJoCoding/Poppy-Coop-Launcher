@@ -22,8 +22,27 @@ local Coop, Net, Game, Config, log, valid, try = P.Coop, P.Net, P.Game, P.Config
 local SYNC_ACT = Config.sync_activations ~= false
 -- Chapter 1 roll-up doors (EventRaiseLowerDoors_C: behind hand scanners, two-hand pads, power room). They are
 -- opened by many different pads/levers whose own "force" functions don't move the door in the other games,
--- so the door itself is watched: closed -> open here is sent as "Force Door Open" (see raise_door_tick)
+-- so the door's own DoorOpen is shared as "Force Door Open" (REMAP) and applied with a guard (apply)
 P.RaiseDoor = { state = {}, remote = {}, at = 0, CLASS = "EventRaiseLowerDoors_C", FN = "Force Door Open" }
+-- Chapter 1 hand scanners (LeftHandAccessPad_C): putting the hand on / taking it off is shared live, so the
+-- other games run the same scan (charge bar, sound) and open the same doors. What a replayed scan does
+-- afterwards (Activate Blueprints, the doors' DoorOpen) is not sent back for ECHO s.
+P.Pad = { CLASS = "LeftHandAccessPad_C", LIVE = { ["Activate With Hand"] = true, ["Deactivate With Hand"] = true },
+    remote_at = -100, ECHO = 8, done = {} }     -- done: path -> completed (the game repeats Activate Blueprints every second)
+-- "New Game" pressed in the main menu: for FRESH_SECS this game starts from the beginning, even if a friend
+-- is further. The friend's catch-up batch on joining (their open doors, hands, items: "lbeg" .. "lend") and
+-- their checkpoint are dropped then; what they do live from now on still comes through.
+P.Fresh = { untilT = -1, SECS = 120, batch = {}, hooked = false,
+    FN = ":BndEvt__UI_MainMenu_NewGameButton_K2Node_ComponentBoundEvent_1_OnPressed__DelegateSignature" }
+P.fresh = function() return os.clock() < P.Fresh.untilT end
+-- Quiet time: while the game tears levels down (dying -> reload, teleport, a streamed area being unloaded)
+-- the hooked Blueprint functions still fire on half-destroyed actors. Reading their params / calling functions
+-- on them from the hook (GetParentActor...) crashed the game inside UE4SS (crash reports 1.6.3: CH2 after a
+-- death, a teleport, a level release). Then the hooks do nothing and friends' events wait (Pending).
+P.Quiet = { untilT = -1, load = false, MAX_DEATH = 60, AFTER_LOAD = 3, RELEASE = 4 }
+P.hush = function(secs) P.Quiet.untilT = math.max(P.Quiet.untilT, os.clock() + secs) end
+P.quiet = function() return P.Quiet.load or os.clock() < P.Quiet.untilT end
+P.LATE_CLASSES = { LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
@@ -72,6 +91,7 @@ local function actor_path(obj)
     local p = fullpath(obj)
     if p and p:find("ChildActor_GEN_VARIABLE_", 1, true) then
         local ok, cp = pcall(function()
+            if P.quiet() or not obj:IsValid() then return nil end
             local parent, comp = obj:GetParentActor(), obj:GetParentComponent()
             if parent and parent:IsValid() and comp and comp:IsValid() then
                 local pp, cn = fullpath(parent), comp:GetFName():ToString()
@@ -524,6 +544,7 @@ local function cp_number(args) return tonumber(tostring(args or ""):match("^n:(%
 local CP1_PENDING = nil
 local function cp1_apply(n, from)
     if P.CHAPTER ~= 1 or not SHARE_CP1 or not n then return end
+    if P.fresh() then return end                         -- just pressed New Game: start from the beginning
     if n < CP_MAX and from and Coop.active() then
         Coop.send_to(from, "cp1", tostring(CP_MAX))      -- they are behind: tell them ours right away
         return
@@ -606,16 +627,39 @@ local function apply(e)
         local a = find_actor(e.path)
         if not a then return false end
         if try(function() return a["IsClosed"] end) == false then return true end   -- open here already
-        P.RaiseDoor.remote[e.path] = true                       -- (our watcher must not send it back)
-        replaying = replaying + 1
-        local r = call_with(a, e.fn, "")
-        replaying = replaying - 1
-        log("roll-up door opened by a friend: %s (%s)", e.path:match("([^.]+)$") or e.path, tostring(r))
-        return r ~= "later"
+        P.RaiseDoor.remote[e.path] = true                       -- (its own DoorOpen must not be sent back)
+        local path = e.path
+        local function open_it()
+            local a2 = find_actor(path)
+            if not a2 or try(function() return a2["IsClosed"] end) == false then return end
+            local r = call_with(a2, P.RaiseDoor.FN, "")
+            log("roll-up door opened by a friend: %s (%s)", path:match("([^.]+)$") or path, tostring(r))
+        end
+        if P.late then P.late(open_it, "roll-up door") else open_it() end   -- timeline start: not inside a tick
+        return true
     elseif e.kind == "act" then
         local a = find_actor(e.path)
         if not a then return false end
         if not near_enough(e.path, a) then return false end   -- stays pending until we come close
+        local acls = P.CHAPTER == 1 and tostring(try(function() return a:GetClass():GetFullName() end) or ""):match("([^%.]+)$")
+        if acls and P.LATE_CLASSES[acls] and P.late then
+            -- Chapter 1 scanners / doors start timelines and sounds: run them at the late point (not inside an
+            -- actor tick, where that crashed / deadlocked the game)
+            if acls == P.Pad.CLASS then
+                P.Pad.remote_at = P.game_time()
+                if e.fn == "Force Complete" then P.Pad.done[e.path] = true end
+            end
+            local path, fn, args = e.path, e.fn, e.args
+            P.late(function()
+                local a2 = find_actor(path)
+                if a2 then
+                    if acls == P.Pad.CLASS then P.Pad.remote_at = P.game_time() end
+                    local r = call_with(a2, fn, args)
+                    log("friend's %s: %s on %s (%s)", acls == P.Pad.CLASS and "hand scanner" or "door", fn, path:match("([^.]+)$") or path, r)
+                end
+            end, "scanner/door")
+            return true
+        end
         if P.CHAPTER == 1 and lsa_fn(e.fn) and P.late then
             -- Chapter 1: a level-script event can start animations/sequences; animation calls from inside an
             -- actor tick deadlock the game there (see ARCHITECTURE "Late queue") -> run it at the late point
@@ -712,6 +756,11 @@ local function auto_follow_tick()
 end
 
 local function receive(e, from)
+    trace("RECV from %s: %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
+    if P.Fresh.batch[from] and P.fresh() then
+        trace("DROP old progress from %s (new game): %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
+        return
+    end
     e.remote_check = true
     if remote_allowed and not remote_allowed(e) then
         trace("DROP from %s (not allowed): %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
@@ -726,7 +775,7 @@ local function receive(e, from)
     if e.kind == "act" then
         if lsa_fn(e.fn) then log("level event %s from player %s", tostring(e.fn):sub(1, 60), tostring(from)) end
     end
-    if not apply(e) then
+    if P.quiet() or not apply(e) then
         Pending[key .. ((e.kind == "pfn" or e.kind == "cfn") and ("#" .. #Ledger) or "")] = e
         trace("PENDING %s (target not loaded)", key)
     end
@@ -734,6 +783,7 @@ end
 
 local function retry_pending()
     if P.ReplayHold and P.game_time() < P.ReplayHold then return end
+    if P.quiet() then return end
     for key, e in pairs(Pending) do
         if apply(e) then Pending[key] = nil end
     end
@@ -787,6 +837,7 @@ end
 
 -- host sends everything that already happened to a late joiner
 table.insert(P.Handlers.join, function(id, name)
+    Coop.send_to(id, "lbeg", "1")    -- catch-up batch starts (ends with "lend" at the end of this file; see P.Fresh)
     if not Coop.is_host() or #Ledger == 0 then return end
     log("sending %d ledger events to %s", #Ledger, name)
     for _, e in ipairs(Ledger) do
@@ -838,12 +889,15 @@ local REMAP = {
     BP_MoveableCart_C = { SmashBoards = "SmashBoards", SnapToPlace = "SnapToPlace" },
     TrainGoLever_C = { Activated = "Activated" },                 -- Game Station train levers (1.4.8)
     -- Chapter 1
-    SecurityPadInteractionBP_C = { OpenDoors = "Force Correct Code" },
-    LeftHandAccessPad_C = { ["Activate Blueprints"] = "Force Complete" },
+    SecurityPadInteractionBP_C = { OpenDoors = { "Force Correct Code", "b:1" } },   -- (takes one bool: true opens)
+    LeftHandAccessPad_C = { ["Activate Blueprints"] = "Force Complete",
+        ["Activate With Hand"] = "Activate With Hand", ["Deactivate With Hand"] = "Deactivate With Hand" },
+    EventRaiseLowerDoors_C = { DoorOpen = "Force Door Open" },     -- roll-up doors (see P.RaiseDoor)
 }
 local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
-for _, m in pairs(REMAP) do for _, fn in pairs(m) do REMAP_TARGETS[fn] = true end end
+-- a target is a function name, or { name, encoded args } when the force function takes parameters
+for _, m in pairs(REMAP) do for _, fn in pairs(m) do REMAP_TARGETS[type(fn) == "table" and fn[1] or fn] = true end end
 local DESTROY_OK = { "pickup", "3ditem", "item", "collect", "vhs", "key", "tape", "trophy", "battery", "hand", "web", "vent" }
 -- player inventory mutators: replicated to every other player's own pawn
 local INV_FNS = { "Add Stored Item In Inventory", "Remove Item From Inventory", "Remove Stored Item From Inventory" }
@@ -963,10 +1017,12 @@ local function share_now(e)
     if e.kind ~= "pfn" and e.kind ~= "cfn" then
         if seen_recently(key) then
             if key:find("|On Interact|", 1, true) then mark(key) end   -- still the same held press
+            trace("SEND skipped (sent recently): %s", key)
             return
         end
         mark(key)
     end
+    trace("SEND %s", key)
     send(e)
 end
 
@@ -1004,6 +1060,7 @@ local function on_local_call(cname, fnname, ctx, ...)
     local pf = P.Perf
     if pf then pf.hooks = pf.hooks + 1; pf.by[hk] = (pf.by[hk] or 0) + 1 end
     if Hot[hk] then return end
+    if P.quiet() and not CP_FNS_ALL[fnname] and not DEATH_SET[fnname] and fnname ~= "Load Levels" then return end
     local sec = math.floor(os.clock())
     if sec ~= HotSec then HotSec = sec; HotCount = {} end
     local c = (HotCount[hk] or 0) + 1
@@ -1070,6 +1127,7 @@ local function on_local_call(cname, fnname, ctx, ...)
     if DEATH_SET[fnname] and cname:find("PlayerBP", 1, true) then
         if not Game.dead then
             Game.dead = true
+            P.hush(P.Quiet.MAX_DEATH)                -- the level reloads soon (until then: quiet, see P.Quiet)
             Coop.send_event("died", fnname)
             log("you died (%s) - your friends see you fall", fnname)
         end
@@ -1102,8 +1160,17 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     local rm = REMAP[short_class(cname)]
     if rm and rm[fnname] then
+        -- (a scan / door a friend started here finishes by itself: don't send its results back)
+        local sc = short_class(cname)
+        if P.CHAPTER == 1 and (sc == P.Pad.CLASS or sc == P.RaiseDoor.CLASS)
+            and (P.game_time() - P.Pad.remote_at < P.Pad.ECHO or P.RaiseDoor.remote[path]) then return end
+        if sc == P.Pad.CLASS and fnname == "Activate Blueprints" then
+            if P.Pad.done[path] then return end
+            P.Pad.done[path] = true
+        end
         if SYNC_ACT and is_level_placed(path) then
-            share({ kind = "act", path = path, fn = rm[fnname], args = "" })
+            local tgt = rm[fnname]
+            share({ kind = "act", path = path, fn = type(tgt) == "table" and tgt[1] or tgt, args = type(tgt) == "table" and tgt[2] or "" })
         end
         return
     end
@@ -1347,6 +1414,7 @@ end
 --------------------------------------------------------------- hands
 local hands_last = { R = nil, L = nil }
 Coop.on("hand", function(from, which)
+    if P.Fresh.batch[from] and P.fresh() then return end      -- (old progress after New Game, see P.Fresh)
     local p = pawn()
     if not SYNC_HANDS or not p then return end
     local prop = which == "R" and "hasRightHand?" or "hasLeftHand?"
@@ -1411,6 +1479,7 @@ end)
 Coop.on("rhand", function(from, rest)
     local n = tonumber(rest)
     if not SYNC_HANDS or P.CHAPTER ~= 2 or not n or n <= RH.room then return end
+    if P.Fresh.batch[from] and P.fresh() then return end      -- (old progress after New Game, see P.Fresh)
     RH.room, RH.applied = n, false
     log("player %d has right hand type %d", from, n)
 end)
@@ -1423,7 +1492,9 @@ local function check_rhand()
         if Coop.active() then Coop.send_event("rhand", tostring(cur)); log("we have right hand type %d, sharing", cur) end
     elseif RH.room > cur and not RH.applied then
         RH.applied = true                       -- once per load: switching back by hand stays possible
-        rhand_apply(RH.room)
+        -- (swapping the hand starts animations: not from inside the actor tick, see "Late queue")
+        local n = RH.room
+        if P.late then P.late(function() if pawn() then rhand_apply(n) end end, "right hand") else rhand_apply(n) end
     end
 end
 table.insert(P.Handlers.join, function(id)
@@ -1680,6 +1751,7 @@ local function sync_levels()
                     s.want = true; Ours[n] = nil
                     log("keeping %s (%s): you're standing in it", n, s.pkg)
                 else
+                    P.hush(P.Quiet.RELEASE)
                     set_slot(n, false); Ours[n] = nil
                     log("releasing %s (%s): nobody needs it", n, tostring(s.pkg))
                 end
@@ -1843,6 +1915,7 @@ end
 local function inv1_valid_name(s) return type(s) == "string" and #s > 0 and #s <= 64 and s:match("^[%w_ %-]+$") ~= nil end
 Coop.on("inv1", function(from, rest)
     if P.CHAPTER ~= 1 or not SYNC_INV then return end
+    if P.Fresh.batch[from] and P.fresh() then return end    -- a friend's old keys after New Game (see P.Fresh)
     local op, name = tostring(rest or ""):match("^([%+%-])(.+)$")
     if not op or not inv1_valid_name(name) then return end
     Inv1.team[name] = op == "+" or nil
@@ -1896,6 +1969,12 @@ P.Inv1 = Inv1     -- diagnostics
 
 table.insert(P.Handlers.tick, function(dt, have)
     local crumb = P.crumb or function() end
+    -- the frame tick never runs inside a friend's replayed event: a counter left above 0 here made this game
+    -- treat everything its own player did as a replay and share nothing any more (doors, code pad...)
+    if replaying ~= 0 then
+        if not P.ReplayStuckLogged then P.ReplayStuckLogged = true; log("replay counter was stuck at %d - reset (sharing works again)", replaying) end
+        replaying = 0
+    end
     if #FrameQ > 0 then crumb("world: flush"); pcall(flush_shares) end
     if #HookQ > 0 and have then crumb("world: hooks"); pcall(hook_queue_tick) end
     if AutoFollow and have then pcall(auto_follow_tick) end
@@ -1910,7 +1989,7 @@ table.insert(P.Handlers.tick, function(dt, have)
         crumb("world: count levels")
         -- the world's own level list (a property read, ~0 ms; FindAllOf("Level") cost 12 ms every time)
         local lv = level_count()
-        if lv ~= last_level_objs then
+        if lv ~= last_level_objs and not P.quiet() then      -- (after the quiet time: see P.Quiet)
             SlotList = nil
             HookQ = {}
             local c0 = os.clock()
@@ -1951,30 +2030,7 @@ if valid(FindFirstOf("PlayerBP_C")) then pcall(scan_classes) end
 log("world sync v0.4 loaded (activations=%s pickups=%s inventory=%s levels=%s hands=%s)",
     tostring(SYNC_ACT), tostring(SYNC_DESTROY), tostring(SYNC_INV), tostring(SYNC_LEVELS), tostring(SYNC_HANDS))
 
--- Chapter 1 roll-up doors: once a second, every EventRaiseLowerDoors_C that went from closed to open here
--- (by a hand scanner, two-hand pad, power...) is opened in the other games too (RaiseDoor, apply).
--- A level reload resets the doors, so the remembered states are dropped then.
-table.insert(P.Handlers.tick, function()
-    if P.CHAPTER ~= 1 or not SYNC_ACT then return end
-    local t = P.game_time()
-    if t - P.RaiseDoor.at < 1 then return end
-    P.RaiseDoor.at = t
-    for _, d in ipairs(FindAllOf(P.RaiseDoor.CLASS) or {}) do
-        if valid(d) then
-            local path = actor_path(d)
-            local closed = try(function() return d["IsClosed"] end)
-            if path and type(closed) == "boolean" then
-                local was = P.RaiseDoor.state[path]
-                if was == true and closed == false and not P.RaiseDoor.remote[path] and Coop.active() and is_level_placed(path) then
-                    share_now({ kind = "act", path = path, fn = P.RaiseDoor.FN, args = "" })
-                    log("roll-up door opened here, shared: %s", path:match("([^.]+)$") or path)
-                end
-                P.RaiseDoor.state[path] = closed
-            end
-        end
-    end
-end)
-table.insert(P.Handlers.unload, function() P.RaiseDoor.state = {}; P.RaiseDoor.remote = {} end)
+table.insert(P.Handlers.unload, function() P.RaiseDoor.remote = {}; P.Pad.done = {} end)
 
 -- "New Game" from the main menu: the world starts over at checkpoint 0, but the ledger still remembered every
 -- door / scanner / item from before and re-applied it when the levels loaded (doors stood open in the new game).
@@ -1991,7 +2047,6 @@ P.release_replays = function()
     retry_pending()
 end
 P.new_game_check = function(cp)
-    if not P.ReplayHold then return end
     if cp == 0 then
         local n = #Ledger
         for i = #Ledger, 1, -1 do Ledger[i] = nil end
@@ -1999,13 +2054,57 @@ P.new_game_check = function(cp)
         for k in pairs(Pending) do Pending[k] = nil end
         CP_MAX, CP_FIX, LOCAL_CP_SEEN = 0, nil, false
         P.RaiseDoor.state, P.RaiseDoor.remote = {}, {}
+        Inv1.team, Inv1.last, Inv1.addr = {}, nil, nil       -- (the code door's "Security" key came back)
+        RH.room, RH.applied = 0, true                         -- (and Chapter 2's right hand type)
         P.ReplayHold, P.HeldReplays = nil, {}
+        P.NewGameAt = P.game_time()
         log("new game: forgot %d remembered world events (doors, items...)", n)
         return
     end
-    P.release_replays()
+    if P.ReplayHold then P.release_replays() end
 end
-table.insert(P.Handlers.unload, function() P.ReplayHold = P.game_time() + P.REPLAY_HOLD; P.HeldReplays = {} end)
+-- (the spawn at checkpoint 0 can come BEFORE this world change: then there is nothing left to hold)
+table.insert(P.Handlers.unload, function()
+    if P.NewGameAt and P.game_time() - P.NewGameAt < 20 then return end
+    P.ReplayHold = P.game_time() + P.REPLAY_HOLD; P.HeldReplays = {}
+end)
 table.insert(P.Handlers.tick, function()
     if P.ReplayHold and P.game_time() >= P.ReplayHold then P.release_replays() end
+end)
+
+-- the friend's catch-up batch (see P.Fresh)
+Coop.on("lbeg", function(from) P.Fresh.batch[from] = true end)
+Coop.on("lend", function(from) P.Fresh.batch[from] = nil end)
+P.start_new_game = function()
+    P.Fresh.untilT = os.clock() + P.Fresh.SECS
+    P.new_game_check(0)
+    log("New Game pressed: starting from the beginning (friends' old progress ignored for %d s)", P.Fresh.SECS)
+end
+-- Chapter 1 main menu: hook its New Game button. The menu widget only exists in the menu, so look for it once
+-- a second there (on the game thread; nothing cached is touched) until the hook is in. The hook stays for the
+-- whole session (UE4SS keeps it by function path). It takes no parameters, so registering it from here is fine.
+if P.CHAPTER == 1 and LoopAsync and ExecuteInGameThread then
+    LoopAsync(1000, function()
+        if P.Fresh.hooked then return true end
+        if Game.pawn ~= nil or Game.loading then return false end
+        ExecuteInGameThread(function()
+            if P.Fresh.hooked then return end
+            local u = try(FindFirstOf, "UI_MainMenu2_C")
+            if not u or not try(function() return u:IsValid() end) then return end
+            local cls = fullpath(try(function() return u:GetClass() end))
+            if not cls then return end
+            P.Fresh.hooked = true
+            local ok, err = pcall(RegisterHook, cls .. P.Fresh.FN, function() pcall(P.start_new_game) end)
+            log("New Game button %s", ok and "hooked" or ("not hooked: " .. tostring(err)))
+        end)
+        return false
+    end)
+end
+-- (registered last: everything the join handlers above sent was the catch-up batch)
+table.insert(P.Handlers.join, function(id) Coop.send_to(id, "lend", "1") end)
+-- quiet while a level loads (see P.Quiet): from the world change until a moment after the player is back
+table.insert(P.Handlers.unload, function() P.Quiet.load = true end)
+table.insert(P.Handlers.restart, function()
+    P.Quiet.load = false
+    P.Quiet.untilT = os.clock() + P.Quiet.AFTER_LOAD     -- (also ends a death's quiet time)
 end)
