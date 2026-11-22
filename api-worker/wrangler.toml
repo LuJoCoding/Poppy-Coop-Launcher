@@ -1,0 +1,10 @@
+name = "poppycoop-api"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+# Friends database: `npx wrangler d1 create poppycoop`, then paste the database_id it prints here.
+[[d1_databases]]
+binding = "DB"
+database_name = "poppycoop"
+database_id = "37f71b9e-cc1f-42b1-8632-c5d89e6a6476"
