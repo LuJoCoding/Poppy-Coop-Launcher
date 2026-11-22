@@ -5,6 +5,7 @@
 #include "friends_net.h"
 #include "logs.h"
 #include "zipwrite.h"
+#include "splitscreen.h"
 #include <windowsx.h>
 #include <shobjidl.h>
 #include <functional>
@@ -135,6 +136,14 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Set up  \x203A", L"Einrichten  \x203A" },
         { L"Settings", L"Einstellungen" },
         { L"Logs", L"Logs" },
+        { L"Layout: ", L"Aufteilung: " },
+        { L"Off", L"Aus" },
+        { L"Left / right", L"Links / rechts" },
+        { L"Top / bottom", L"Oben / unten" },
+        { L"One per monitor", L"Ein Monitor pro Spiel" },
+        { L"Split screen: PLAY starts more game windows.", L"Splitscreen: SPIELEN startet weitere Spielfenster." },
+        { L"Next start: the game windows are placed ", L"Ab dem nächsten Start: Spielfenster " },
+        { L"Game windows are not arranged.", L"Spielfenster werden nicht angeordnet." },
         { L"CRASH REPORTS", L"ABSTURZBERICHTE" },
         { L"Send crash reports to the developers?", L"Absturzberichte an die Entwickler senden?" },
         { L"When the game crashes, the launcher can send the error message, the end of the mod's log, the mod version and your Windows version to the PoppyCoop developers. User names in folder paths are removed. It helps us fix crashes. You can change this any time in the launcher settings.", L"Wenn das Spiel abstürzt, kann der Launcher die Fehlermeldung, das Ende des Mod-Logs, die Mod-Version und deine Windows-Version an die PoppyCoop-Entwickler schicken. Benutzernamen in Ordnerpfaden werden entfernt. Das hilft uns, Abstürze zu beheben. Du kannst das jederzeit in den Launcher-Einstellungen ändern." },
@@ -371,22 +380,30 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
-    { false, L"Friends",
+    { false, L"New Game starts clean",
+      L"After New Game, doors that were opened before stayed open. Now a new game starts fresh - Load Game and respawns still restore everything.",
+      L"Neues Spiel startet sauber",
+      L"Nach Neues Spiel blieben vorher geöffnete Türen offen. Jetzt beginnt ein neues Spiel frisch - Spiel laden und Respawn stellen weiter alles wieder her." },
+    { false, L"Split screen",
+      L"Several games at once (launcher settings): the windows are placed left / right, top / bottom or one per monitor, without frames, and stay where they are.",
+      L"Splitscreen",
+      L"Mehrere Spiele gleichzeitig (Launcher-Einstellungen): Die Fenster werden links / rechts, oben / unten oder pro Monitor angeordnet, ohne Rahmen, und bleiben an ihrem Platz." },
+    { false, L"Chapter 1: hand scanner doors",
+      L"When a player opens a roll-up door with a hand scanner (or the two-hand pad / power room pad), it opens for everyone now - before only the scanner turned green.",
+      L"Kapitel 1: Handscanner-Tore",
+      L"Öffnet ein Spieler ein Rolltor mit einem Handscanner (oder dem Zwei-Hand-Scanner / Power-Room-Scanner), geht es jetzt bei allen auf - vorher wurde nur der Scanner grün." },
+    { true, L"1.6.1: Friends",
       L"Every player has a friend code like Max#12345 (Friends, bottom left). Send a request - accepted friends show when they are online, in which chapter and room, and you can join them with one click.",
-      L"Freunde",
+      L"1.6.1: Freunde",
       L"Jeder hat einen Freundes-Code wie Max#12345 (Freunde, unten links). Schick eine Anfrage - angenommene Freunde siehst du online, mit Kapitel und Raum, und kannst ihnen mit einem Klick beitreten." },
-    { false, L"Crash reports",
+    { true, L"1.6.1: Crash reports",
       L"If you allow it, the launcher sends a crash report when the game crashes (error, end of the log, versions - no user names). Launcher settings: Send crash reports.",
-      L"Absturzberichte",
+      L"1.6.1: Absturzberichte",
       L"Wenn du es erlaubst, schickt der Launcher bei einem Absturz einen Bericht (Fehler, Log-Ende, Versionen - ohne Benutzernamen). Launcher-Einstellungen: Absturzberichte senden." },
     { true, L"1.6.0: Co-op only when started here",
       L"The mod is only active when you start the game with PLAY in this launcher. Started from Steam, the game is normal (other UE4SS mods still work). Launcher settings: \"Co-op without the launcher\" turns it on for Steam starts too (Steam Deck game mode).",
       L"1.6.0: Koop nur beim Start von hier",
       L"Der Mod ist nur aktiv, wenn du das Spiel mit SPIELEN in diesem Launcher startest. Über Steam gestartet ist das Spiel normal (andere UE4SS-Mods laufen weiter). Launcher-Einstellungen: \"Koop auch ohne Launcher\" schaltet ihn auch für Steam-Starts ein (Steam-Deck-Spielmodus)." },
-    { true, L"1.6.0: Scroll through long logs",
-      L"On the Logs page the whole session can be read now: mouse wheel over the log, Page Up / Page Down, Home / End.",
-      L"1.6.0: Lange Logs scrollen",
-      L"Auf der Logs-Seite kann man jetzt die ganze Sitzung lesen: Mausrad über dem Log, Bild hoch / runter, Pos1 / Ende." },
     { true, L"1.5.9: Linux & Steam Deck: AppImage",
       L"PoppyCoop_Launcher.AppImage is on GitHub now. Make it executable and double-click it - it finds Steam and Proton by itself.",
       L"1.5.9: Linux & Steam Deck: AppImage",
@@ -396,7 +413,7 @@ static const NewsItem NEWS[] = {
       L"1.5.8: Logs-Seite",
       L"Jedes Kapitel hat eine Logs-Seite (neben Einstellungen): deine letzten Sitzungen mit Zeit, Dauer und Fehlern, abgestürzte in Rot. Kapitel 2 ist keine Beta mehr." },
 };
-enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5 };
+enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5, TIMER_SPLIT = 6 };
 
 // ------------------------------------------------------------------ state
 enum class Page { Welcome, Chapter, Settings, Profile, App, Servers, Friends, Logs, News };
@@ -1689,6 +1706,8 @@ static void save_app_prefs() {
     ini_set(L"Launcher", L"Lang", g_lang == 1 ? L"de" : L"en");
     ini_set(L"Launcher", L"Experimental", g_experimental ? L"1" : L"0");
     ini_set(L"Launcher", L"Multi", g_multi ? L"1" : L"0");
+    ini_set(L"Launcher", L"SplitLayout", std::to_wstring(g_split_layout));
+    g_split_on = g_multi && g_split_layout > 0;
     ini_set(L"Launcher", L"CoopAlways", g_coop_always ? L"1" : L"0");
     ini_set(L"Launcher", L"AutoUpdate", g_autoupd ? L"1" : L"0");
     if (g_crashrep >= 0) ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
@@ -1768,7 +1787,12 @@ static void draw_app(int h) {
     };
     row(410, 0, L"Animations", L"Smooth fades and movements. Turn off on very slow PCs.", g_anims, [] { g_anims = !g_anims; save_app_prefs(); });
     row(462, 1, L"Experimental chapters", L"Try Chapters 3-5: you see each other, but doors, puzzles and items aren't shared.", g_experimental, [] { set_experimental(!g_experimental); });
-    row(514, 2, L"Several games at once", L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
+    row(514, 2, L"Several games at once", g_multi ? L"Split screen: PLAY starts more game windows." : L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
+    if (g_multi)       // split screen layout: click cycles (drawn over the row, so it gets the click first)
+        button(MX + MW - 330, 514 + 9, 250, 30, tr(L"Layout: ") + tr(split_layout_name(g_split_layout)), Btn::Secondary, [] {
+            g_split_layout = (g_split_layout + 1) % SPLIT_LAYOUTS; save_app_prefs();
+            toast(g_split_layout ? tr(L"Next start: the game windows are placed ") + tr(split_layout_name(g_split_layout)) : tr(L"Game windows are not arranged."));
+        });
     row(618, 5, L"Co-op without the launcher", L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", g_coop_always, [] {
         g_coop_always = !g_coop_always; save_app_prefs();
         for (auto& ch : g_ch) if (!inst_ver(ch).empty()) write_launch_mark(ch);   // "always" / back to a stale time
@@ -2632,6 +2656,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == TIMER_MINSIZE) { SendMessageW(h, WM_APP_MINSIZE, 0, 0); return 0; }
         if (wp == TIMER_ANIM) { InvalidateRect(h, nullptr, FALSE); return 0; }
+        if (wp == TIMER_SPLIT) { if (g_split_on) keep_game_windows(); return 0; }
         if (wp == TIMER_PROBE) { start_probe(g_page == Page::Servers); return 0; }
         if (wp == TIMER_CARET) { if (g_focus.value) { g_caret_on = !g_caret_on; InvalidateRect(h, nullptr, FALSE); } return 0; }
         if (wp == TIMER_POLL) {
@@ -2878,6 +2903,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     ini_init();
     g_experimental = ini_get(L"Launcher", L"Experimental", L"0") == L"1";
     g_multi = ini_get(L"Launcher", L"Multi", L"0") == L"1";
+    g_split_layout = std::max(0, std::min(SPLIT_LAYOUTS - 1, _wtoi(ini_get(L"Launcher", L"SplitLayout", L"1").c_str())));
+    g_split_on = g_multi && g_split_layout > 0;
     g_coop_always = ini_get(L"Launcher", L"CoopAlways", L"0") == L"1";
     g_autoupd = ini_get(L"Launcher", L"AutoUpdate", L"1") != L"0";
     friends_load();
@@ -2957,6 +2984,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     if (after_update) toast(tr(L"Updated to v") + MOD_VERSION);
     if (!g_test) maybe_report_crashes();
     SetTimer(g_wnd, TIMER_POLL, 1000, nullptr);
+    SetTimer(g_wnd, TIMER_SPLIT, 250, nullptr);       // split screen: keep the game windows in place
     SetTimer(g_wnd, TIMER_CARET, 530, nullptr);
     start_probe(false);
     SetTimer(g_wnd, TIMER_PROBE, 30000, nullptr);

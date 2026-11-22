@@ -590,12 +590,17 @@ static void write_launch_mark(const Chapter& c) {
     WriteFile(f, v.data(), (DWORD)v.size(), &w, nullptr);
     CloseHandle(f);
 }
+// Split screen ("Several games at once" + a layout): the games start windowed (-windowed); the launcher then
+// places each window in its part of the screen and keeps it there (splitscreen.h). g_game_pid: window -> process.
+static bool g_split_on = false;
+static DWORD g_game_pid[8] = {};
+static std::wstring split_args() { return g_split_on ? L" -windowed" : L""; }
 static bool launch_game(const Chapter& c, int window = 0, const std::wstring& name = L"", const std::wstring& color = L"", const std::wstring& room = L"") {
     if (window == 0) keep_previous_log(c);        // (more windows of one game share the log: only the first)
     write_launch_mark(c);
     if (window > 0 || c.experimental || !*c.appid) {
         std::wstring exe = c.dir + L"\\" + c.exe;
-        std::wstring cmd = L"\"" + exe + L"\"";
+        std::wstring cmd = L"\"" + exe + L"\"" + split_args();
         std::pair<const wchar_t*, std::wstring> envs[] = { { L"POPPYCOOP_NAME", name }, { L"POPPYCOOP_COLOR", color },
             { L"POPPYCOOP_ROOM", room }, { L"POPPYCOOP_INSTANCE", window > 0 ? std::to_wstring(window) : L"" } };
         for (auto& e : envs) SetEnvironmentVariableW(e.first, e.second.empty() ? nullptr : e.second.c_str());
@@ -604,18 +609,21 @@ static bool launch_game(const Chapter& c, int window = 0, const std::wstring& na
         BOOL ok = CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, c.dir.c_str(), &si, &pi);
         for (auto& e : envs) SetEnvironmentVariableW(e.first, nullptr);
         if (!ok) return false;
+        if (window >= 0 && window < 8) g_game_pid[window] = pi.dwProcessId;
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         return true;
     }
     if (via_steam(c)) {
-        std::wstring url = std::wstring(L"steam://rungameid/") + c.appid;
+        std::wstring url = g_split_on ? std::wstring(L"steam://run/") + c.appid + L"//-windowed/" : std::wstring(L"steam://rungameid/") + c.appid;
+        g_game_pid[0] = 0;                        // started by Steam: the window keeper finds it
         return (INT_PTR)ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL) > 32;
     }
     std::wstring exe = c.dir + L"\\" + c.exe;
-    std::wstring cmd = L"\"" + exe + L"\"";
+    std::wstring cmd = L"\"" + exe + L"\"" + split_args();
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, c.dir.c_str(), &si, &pi)) return false;
+    g_game_pid[0] = pi.dwProcessId;
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     return true;
 }

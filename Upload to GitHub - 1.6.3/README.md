@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.6.1.zip`**
+Download **`PoppyCoop_Launcher_1.6.3.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,11 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.3
+- **Fixed (Chapter 1): roll-up doors behind hand scanners didn't open for the other players.** When one player used the blue hand scanner (or the two-hand pad / the power room pad), the scanner turned green for everyone but the door only opened for that player. The doors themselves are synced now - however they were opened. Players who join later get them open too.
+- **Fixed: after "New Game" doors stayed open** (e.g. the hallway door after taking the blue hand). The mod remembered everything that was opened before and opened it again in the new game. Now a new game starts with a clean slate; Load Game and respawns still restore everything as before.
+- **Split screen:** with "Several games at once" (launcher settings) the game windows are placed for you - left / right, top / bottom, or one per monitor - without frames, and kept in place (they don't jump around any more when you click into the other one).
 
 ### 1.6.1
 - **Friends (new):** every player has a friend code like `Max#12345` (Friends page, bottom left). Send a friend request with it - once it's accepted you see when your friends are online, which chapter and room they're in, and can join them with one click. Players you played with show up under "Recently played with".

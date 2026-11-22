@@ -20,6 +20,10 @@ local P = _G.PoppyCoop
 local Coop, Net, Game, Config, log, valid, try = P.Coop, P.Net, P.Game, P.Config, P.log, P.valid, P.try
 
 local SYNC_ACT = Config.sync_activations ~= false
+-- Chapter 1 roll-up doors (EventRaiseLowerDoors_C: behind hand scanners, two-hand pads, power room). They are
+-- opened by many different pads/levers whose own "force" functions don't move the door in the other games,
+-- so the door itself is watched: closed -> open here is sent as "Force Door Open" (see raise_door_tick)
+P.RaiseDoor = { state = {}, remote = {}, at = 0, CLASS = "EventRaiseLowerDoors_C", FN = "Force Door Open" }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
@@ -598,6 +602,16 @@ local function apply(e)
         if not a then return false end
         trace("APPLY door %s -> %d leaves opened", e.path, open_door(a))
         return true
+    elseif e.kind == "act" and e.fn == P.RaiseDoor.FN and e.path and e.path:find((P.RaiseDoor.CLASS:gsub("_C$", "")), 1, true) then
+        local a = find_actor(e.path)
+        if not a then return false end
+        if try(function() return a["IsClosed"] end) == false then return true end   -- open here already
+        P.RaiseDoor.remote[e.path] = true                       -- (our watcher must not send it back)
+        replaying = replaying + 1
+        local r = call_with(a, e.fn, "")
+        replaying = replaying - 1
+        log("roll-up door opened by a friend: %s (%s)", e.path:match("([^.]+)$") or e.path, tostring(r))
+        return r ~= "later"
     elseif e.kind == "act" then
         local a = find_actor(e.path)
         if not a then return false end
@@ -719,6 +733,7 @@ local function receive(e, from)
 end
 
 local function retry_pending()
+    if P.ReplayHold and P.game_time() < P.ReplayHold then return end
     for key, e in pairs(Pending) do
         if apply(e) then Pending[key] = nil end
     end
@@ -728,6 +743,7 @@ end
 -- other players already did there (opened doors, picked-up items...).
 local function replay_level(pkg)
     if not pkg then return end
+    if P.ReplayHold and P.game_time() < P.ReplayHold then P.HeldReplays[pkg] = true; return end   -- see new_game_check
     local needle = "." .. pkg .. ":PersistentLevel."
     local n = 0
     for _, e in ipairs(Ledger) do
@@ -1022,6 +1038,7 @@ local function on_local_call(cname, fnname, ctx, ...)
                 if a then
                     LOCAL_CP = (CP_MAX >= a and CP_MAX <= b) and CP_MAX or a
                     log("spawned at checkpoint %d", LOCAL_CP)
+                    P.new_game_check(LOCAL_CP)
                 end
             end
         elseif ACT_SET[fnname] and path:find("StreamInLevel", 1, true) then
@@ -1933,3 +1950,62 @@ end)
 if valid(FindFirstOf("PlayerBP_C")) then pcall(scan_classes) end
 log("world sync v0.4 loaded (activations=%s pickups=%s inventory=%s levels=%s hands=%s)",
     tostring(SYNC_ACT), tostring(SYNC_DESTROY), tostring(SYNC_INV), tostring(SYNC_LEVELS), tostring(SYNC_HANDS))
+
+-- Chapter 1 roll-up doors: once a second, every EventRaiseLowerDoors_C that went from closed to open here
+-- (by a hand scanner, two-hand pad, power...) is opened in the other games too (RaiseDoor, apply).
+-- A level reload resets the doors, so the remembered states are dropped then.
+table.insert(P.Handlers.tick, function()
+    if P.CHAPTER ~= 1 or not SYNC_ACT then return end
+    local t = P.game_time()
+    if t - P.RaiseDoor.at < 1 then return end
+    P.RaiseDoor.at = t
+    for _, d in ipairs(FindAllOf(P.RaiseDoor.CLASS) or {}) do
+        if valid(d) then
+            local path = actor_path(d)
+            local closed = try(function() return d["IsClosed"] end)
+            if path and type(closed) == "boolean" then
+                local was = P.RaiseDoor.state[path]
+                if was == true and closed == false and not P.RaiseDoor.remote[path] and Coop.active() and is_level_placed(path) then
+                    share_now({ kind = "act", path = path, fn = P.RaiseDoor.FN, args = "" })
+                    log("roll-up door opened here, shared: %s", path:match("([^.]+)$") or path)
+                end
+                P.RaiseDoor.state[path] = closed
+            end
+        end
+    end
+end)
+table.insert(P.Handlers.unload, function() P.RaiseDoor.state = {}; P.RaiseDoor.remote = {} end)
+
+-- "New Game" from the main menu: the world starts over at checkpoint 0, but the ledger still remembered every
+-- door / scanner / item from before and re-applied it when the levels loaded (doors stood open in the new game).
+-- After a world change, re-applying is held until the spawn checkpoint is known (Load Checkpoint, a few
+-- seconds): checkpoint 0 = a new game -> everything remembered is dropped; any other = Load Game / respawn ->
+-- the held levels are re-applied as before. No spawn seen within REPLAY_HOLD s: re-applied anyway.
+P.REPLAY_HOLD = 10
+P.HeldReplays = {}
+P.release_replays = function()
+    P.ReplayHold = nil
+    local held = P.HeldReplays
+    P.HeldReplays = {}
+    for pkg in pairs(held) do replay_level(pkg) end
+    retry_pending()
+end
+P.new_game_check = function(cp)
+    if not P.ReplayHold then return end
+    if cp == 0 then
+        local n = #Ledger
+        for i = #Ledger, 1, -1 do Ledger[i] = nil end
+        for k in pairs(LedgerKeys) do LedgerKeys[k] = nil end
+        for k in pairs(Pending) do Pending[k] = nil end
+        CP_MAX, CP_FIX, LOCAL_CP_SEEN = 0, nil, false
+        P.RaiseDoor.state, P.RaiseDoor.remote = {}, {}
+        P.ReplayHold, P.HeldReplays = nil, {}
+        log("new game: forgot %d remembered world events (doors, items...)", n)
+        return
+    end
+    P.release_replays()
+end
+table.insert(P.Handlers.unload, function() P.ReplayHold = P.game_time() + P.REPLAY_HOLD; P.HeldReplays = {} end)
+table.insert(P.Handlers.tick, function()
+    if P.ReplayHold and P.game_time() >= P.ReplayHold then P.release_replays() end
+end)
