@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.6.5.zip`](Upload%20to%20GitHub%20-%201.6.5/PoppyCoop_Launcher_1.6.5.zip)**
-(folder `Upload to GitHub - 1.6.5`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.6.6.zip`](Upload%20to%20GitHub%20-%201.6.6/PoppyCoop_Launcher_1.6.6.zip)**
+(folder `Upload to GitHub - 1.6.6`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,11 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.6
+- **Fixed (Chapter 1): the power room short circuit only happened for the player at the scanner.** When one player puts the hand on the scanner and the power shorts out, it now shorts out for everyone.
+- **Fixed (Chapter 1): restoring the power only worked for the player who solved the puzzle.** The others had to do it all again. Now the whole power-up (scanner, lights, doors) happens for everyone.
+- **Fixed: another Chapter 1 crash a little while after an area was loaded or unloaded** (e.g. after the power room). The mod used remembered parts of objects the game had replaced.
 
 ### 1.6.5
 - **Fixed: Chapter 1 crash for both players after the power / hand scanner part.** The mod touched parts of an area the game had just unloaded.

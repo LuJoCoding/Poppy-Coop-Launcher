@@ -37,6 +37,7 @@ P.Fresh = { untilT = -1, SECS = 120, batch = {}, hooked = false,
 P.fresh = function() return os.clock() < P.Fresh.untilT end
 P.old_progress = function(from) return P.Fresh.batch[from] and P.fresh() end   -- drop this catch-up event?
 P.NewGameReset = {}      -- functions run on New Game (other modules forget what they remembered)
+P.LevelsChanged = {}     -- functions run when a streamed area loaded / unloaded (other modules drop cached parts)
 -- Quiet time: while the game tears levels down (dying -> reload, teleport, a streamed area being unloaded)
 -- the hooked Blueprint functions still fire on half-destroyed actors. Reading their params / calling functions
 -- on them from the hook (GetParentActor...) crashed the game inside UE4SS (crash reports 1.6.3: CH2 after a
@@ -44,7 +45,7 @@ P.NewGameReset = {}      -- functions run on New Game (other modules forget what
 P.Quiet = { untilT = -1, load = false, MAX_DEATH = 60, AFTER_LOAD = 3, RELEASE = 4 }
 P.hush = function(secs) P.Quiet.untilT = math.max(P.Quiet.untilT, os.clock() + secs) end
 P.quiet = function() return P.Quiet.load or os.clock() < P.Quiet.untilT end
-P.LATE_CLASSES = { LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
+P.LATE_CLASSES = { LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
@@ -659,6 +660,15 @@ local function apply(e)
             local path, fn, args = e.path, e.fn, e.args
             P.late(function()
                 local a2 = find_actor(path)
+                if a2 and acls == "PowerConnector_Master_C" and try(function() return a2["Is Puzzle Complete?"] end) == true then
+                    return                                   -- powered here already: don't run the chain twice
+                end
+                if a2 and fn == "Short Circuit Event" then
+                    -- a short only before the power puzzle is solved here (never knock out restored power)
+                    local m = try(FindFirstOf, "PowerConnector_Master_C")
+                    if (m and try(function() return m["Is Puzzle Complete?"] end) == true)
+                        or try(function() return a2["canShortOut?"] end) == false then return end
+                end
                 if a2 then
                     if acls == P.Pad.CLASS and (fn == "Activate With Hand" or fn == "Force Complete") then
                         P.Pad.remote_at = P.game_time()
@@ -906,8 +916,13 @@ local REMAP = {
     -- Chapter 1
     SecurityPadInteractionBP_C = { OpenDoors = { "Force Correct Code", "b:1" } },   -- (takes one bool: true opens)
     LeftHandAccessPad_C = { ["Activate Blueprints"] = "Force Complete",
-        ["Activate With Hand"] = "Activate With Hand", ["Deactivate With Hand"] = "Deactivate With Hand" },
+        ["Activate With Hand"] = "Activate With Hand", ["Deactivate With Hand"] = "Deactivate With Hand",
+        -- power room scanner: the hand on it shorts the power out (then the power puzzle) - same short for everyone
+        ["Short Circuit Event"] = "Short Circuit Event" },
     EventRaiseLowerDoors_C = { DoorOpen = "Force Door Open" },     -- roll-up doors (see P.RaiseDoor)
+    -- power room: the solved power puzzle runs its whole chain (scanner power, lights, Huggy, doors, streaming)
+    -- from this one event; sending its nested calls one by one didn't power anything for the others
+    PowerConnector_Master_C = { ["On Powered_Event"] = "On Powered_Event" },
 }
 local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
@@ -1186,7 +1201,9 @@ local function on_local_call(cname, fnname, ctx, ...)
         end
         if SYNC_ACT and is_level_placed(path) then
             local tgt = rm[fnname]
-            share({ kind = "act", path = path, fn = type(tgt) == "table" and tgt[1] or tgt, args = type(tgt) == "table" and tgt[2] or "" })
+            -- (the power event is sent alone: what it triggered this frame runs from it in the other games)
+            share({ kind = "act", path = path, fn = type(tgt) == "table" and tgt[1] or tgt, args = type(tgt) == "table" and tgt[2] or "",
+                lsa = (sc == "PowerConnector_Master_C" or fnname == "Short Circuit Event") or nil })
         end
         return
     end
@@ -1625,6 +1642,12 @@ local function scan_slots()
                 if pkg then s.pkg = pkg end
             end
             if loaded and not s.was_loaded and s.pkg then LevelReplayAt[s.pkg] = now + 1.0 end
+            -- an area came or went: a reloaded actor often gets the SAME address as before, so cached parts of
+            -- it (door leaves, bridge meshes...) looked alive but were freed -> UE4SS crash (1.6.3-1.6.5 reports,
+            -- 30-60 s after the mod reloaded an area for the other player). Other modules drop their caches.
+            if s.was_loaded ~= nil and loaded ~= s.was_loaded then
+                for _, f in ipairs(P.LevelsChanged) do pcall(f) end
+            end
             s.was_loaded = loaded
         end
     end

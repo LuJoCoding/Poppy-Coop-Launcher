@@ -1044,6 +1044,7 @@ end
 -- so before each use the part's actor is looked up fresh by its path and compared by address.
 local function addr(o) local ok, a = pcall(function() return o:GetAddress() end); return ok and a or nil end
 local function alive(e)
+    if (e.lgen or 0) ~= (P.LevelGen or 0) then return false end     -- cached before an area loaded / unloaded
     local t = now()
     local c = Pose.alive_cache[e.apath]
     if c and c.t == t then return c.ok end
@@ -1201,7 +1202,7 @@ local function pose_scan()
                     local key = pkey_esc(path .. "|" .. it.name)
                     local old = Pose.byKey[key]
                     local caddr = addr(it.c)
-                    local e = { key = key, comp = it.c, actor = it.actor, apath = path, aaddr = aaddr, caddr = caddr }
+                    local e = { key = key, comp = it.c, actor = it.actor, apath = path, aaddr = aaddr, caddr = caddr, lgen = P.LevelGen or 0 }
                     -- reuse the old entry only if it is the very same object (compared by address, never touched)
                     if old and old.caddr and old.caddr == caddr and old.aaddr == aaddr then e = old else
                         local ok, v = pcall(read_pose, it.c, it.actor)
@@ -1332,7 +1333,7 @@ local function anim_scan()
                         local e = Anim.byKey[key]
                         local caddr = addr(c)
                         if not (e and e.caddr == caddr) then
-                            e = { key = key, comp = c, apath = path, aaddr = addr(a), caddr = caddr }
+                            e = { key = key, comp = c, apath = path, aaddr = addr(a), caddr = caddr, lgen = P.LevelGen or 0 }
                             local ok, v = pcall(anim_read, c)
                             e.last = ok and v or nil
                         end
@@ -1735,5 +1736,16 @@ if P.NewGameReset then
     table.insert(P.NewGameReset, function()
         Motion.final, Pose.final, Anim.final = {}, {}, {}
         Pose.sent = {}
+    end)
+end
+
+-- a streamed area loaded / unloaded: cached parts may belong to freed actors that a reload put at the same
+-- address (looked alive, crashed UE4SS) - drop them and rescan
+if P.LevelsChanged then
+    table.insert(P.LevelsChanged, function()
+        P.LevelGen = (P.LevelGen or 0) + 1
+        Pose.parts, Pose.byKey, Pose.alive_cache = {}, {}, {}
+        Anim.parts, Anim.byKey = {}, {}
+        P.Census.want = true
     end)
 end

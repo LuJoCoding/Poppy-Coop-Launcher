@@ -380,6 +380,10 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Chapter 1: power room",
+      L"The short circuit at the power room scanner and the power puzzle are synced: the power goes out and comes back for everyone. Plus a crash fix after areas load.",
+      L"Kapitel 1: Power Room",
+      L"Der Kurzschluss am Power-Room-Scanner und das Strom-Rätsel werden abgeglichen: Der Strom geht bei allen aus und kommt bei allen wieder. Dazu ein Absturz-Fix nach dem Laden von Bereichen." },
     { false, L"Scanners, New Game, furnace doors",
       L"Chapter 1: hand scanners are synced even when both players have power, no more crash after the power part, New Game starts completely fresh. Chapter 2: the furnace doors work again (no more flickering).",
       L"Scanner, Neues Spiel, Ofentüren",
