@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.6.0.zip`**
+Download **`PoppyCoop_Launcher_1.6.1.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,10 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.1
+- **Friends (new):** every player has a friend code like `Max#12345` (Friends page, bottom left). Send a friend request with it - once it's accepted you see when your friends are online, which chapter and room they're in, and can join them with one click. Players you played with show up under "Recently played with".
+- **Crash reports (new, only if you allow it):** at the first start the launcher asks whether it may send a crash report when the game crashes - the error, the end of the mod's log, the mod version and your Windows version, without user names. It helps us fix crashes. Change it any time in the launcher settings.
 
 ### 1.6.0
 - **The co-op mod is only active when you start the game with PLAY in the launcher.** Started from Steam or the game's exe, Poppy Playtime is completely normal again - handy for solo runs. Other UE4SS mods keep working.

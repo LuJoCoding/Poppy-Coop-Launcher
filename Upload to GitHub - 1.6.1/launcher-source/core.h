@@ -25,7 +25,7 @@
 // Online features that need the poppycoop-api worker (tools/api-worker): automatic crash reports and the
 // friends system. Off until the worker is deployed - then build with FEATURE_ONLINE 1 (or -DFEATURE_ONLINE=1).
 #ifndef FEATURE_ONLINE
-#define FEATURE_ONLINE 0
+#define FEATURE_ONLINE 1
 #endif
 
 static const wchar_t* RELAY_URL = L"wss://poppycoop-relay.poppycoopnet.workers.dev";

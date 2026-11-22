@@ -135,6 +135,11 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Set up  \x203A", L"Einrichten  \x203A" },
         { L"Settings", L"Einstellungen" },
         { L"Logs", L"Logs" },
+        { L"CRASH REPORTS", L"ABSTURZBERICHTE" },
+        { L"Send crash reports to the developers?", L"Absturzberichte an die Entwickler senden?" },
+        { L"When the game crashes, the launcher can send the error message, the end of the mod's log, the mod version and your Windows version to the PoppyCoop developers. User names in folder paths are removed. It helps us fix crashes. You can change this any time in the launcher settings.", L"Wenn das Spiel abstürzt, kann der Launcher die Fehlermeldung, das Ende des Mod-Logs, die Mod-Version und deine Windows-Version an die PoppyCoop-Entwickler schicken. Benutzernamen in Ordnerpfaden werden entfernt. Das hilft uns, Abstürze zu beheben. Du kannst das jederzeit in den Launcher-Einstellungen ändern." },
+        { L"Yes, send them", L"Ja, senden" },
+        { L"No", L"Nein" },
         { L"Co-op without the launcher", L"Koop auch ohne Launcher" },
         { L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", L"Auch wenn das Spiel über Steam gestartet wird (z. B. Steam-Deck-Spielmodus). Aus: nur über SPIELEN hier." },
         { L"WHAT'S NEW", L"WAS IST NEU" },
@@ -366,26 +371,26 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
-    { false, L"Co-op only when started here",
+    { false, L"Friends",
+      L"Every player has a friend code like Max#12345 (Friends, bottom left). Send a request - accepted friends show when they are online, in which chapter and room, and you can join them with one click.",
+      L"Freunde",
+      L"Jeder hat einen Freundes-Code wie Max#12345 (Freunde, unten links). Schick eine Anfrage - angenommene Freunde siehst du online, mit Kapitel und Raum, und kannst ihnen mit einem Klick beitreten." },
+    { false, L"Crash reports",
+      L"If you allow it, the launcher sends a crash report when the game crashes (error, end of the log, versions - no user names). Launcher settings: Send crash reports.",
+      L"Absturzberichte",
+      L"Wenn du es erlaubst, schickt der Launcher bei einem Absturz einen Bericht (Fehler, Log-Ende, Versionen - ohne Benutzernamen). Launcher-Einstellungen: Absturzberichte senden." },
+    { true, L"1.6.0: Co-op only when started here",
       L"The mod is only active when you start the game with PLAY in this launcher. Started from Steam, the game is normal (other UE4SS mods still work). Launcher settings: \"Co-op without the launcher\" turns it on for Steam starts too (Steam Deck game mode).",
-      L"Koop nur beim Start von hier",
+      L"1.6.0: Koop nur beim Start von hier",
       L"Der Mod ist nur aktiv, wenn du das Spiel mit SPIELEN in diesem Launcher startest. Über Steam gestartet ist das Spiel normal (andere UE4SS-Mods laufen weiter). Launcher-Einstellungen: \"Koop auch ohne Launcher\" schaltet ihn auch für Steam-Starts ein (Steam-Deck-Spielmodus)." },
-    { false, L"Scroll through long logs",
+    { true, L"1.6.0: Scroll through long logs",
       L"On the Logs page the whole session can be read now: mouse wheel over the log, Page Up / Page Down, Home / End.",
-      L"Lange Logs scrollen",
+      L"1.6.0: Lange Logs scrollen",
       L"Auf der Logs-Seite kann man jetzt die ganze Sitzung lesen: Mausrad über dem Log, Bild hoch / runter, Pos1 / Ende." },
     { true, L"1.5.9: Linux & Steam Deck: AppImage",
       L"PoppyCoop_Launcher.AppImage is on GitHub now. Make it executable and double-click it - it finds Steam and Proton by itself.",
       L"1.5.9: Linux & Steam Deck: AppImage",
       L"Auf GitHub gibt es jetzt PoppyCoop_Launcher.AppImage. Ausführbar machen, doppelklicken - sie findet Steam und Proton selbst." },
-    { true, L"1.5.9: Proper window bar on Linux",
-      L"Under Proton the launcher draws its own dark title bar instead of the old Windows 95 one: drag to move, double-click to maximize, resize at the edges.",
-      L"1.5.9: Richtige Fensterleiste unter Linux",
-      L"Unter Proton zeichnet der Launcher seine eigene dunkle Titelleiste statt der alten Windows-95-Leiste: ziehen zum Verschieben, Doppelklick zum Maximieren, Ränder zum Vergrößern." },
-    { true, L"1.5.9: Report zip works on Linux",
-      L"\"Report zip\" on the Logs page works everywhere now - under Wine / Proton it didn't. On Linux the zip is saved in the launcher folder.",
-      L"1.5.9: Bericht-Zip geht unter Linux",
-      L"\"Bericht-Zip\" auf der Logs-Seite geht jetzt überall - unter Wine / Proton ging es nicht. Unter Linux landet die Zip im Launcher-Ordner." },
     { true, L"1.5.8: Logs page",
       L"Every chapter has a Logs page (next to Settings): your last sessions with time, length and errors, crashed ones in red. Chapter 2 is out of beta.",
       L"1.5.8: Logs-Seite",
@@ -1001,16 +1006,12 @@ static void maybe_report_crashes() {
         }).detach();
     }
 }
-// first start: ask once whether crash reports may be sent (changeable in the launcher settings)
-static void ask_crash_consent() {
-    if (!FEATURE_ONLINE) return;
-    if (g_crashrep != -1) return;
-    int r = MessageBoxW(g_wnd, tr(L"When the game crashes, may the launcher send a crash report to the PoppyCoop developers?\n\n"
-        L"It contains the error message, the end of the mod's log, the mod version and your Windows version - user names "
-        L"in folder paths are removed. It helps us fix crashes.\n\nYou can change this any time in the launcher settings.").c_str(),
-        tr(L"Crash reports").c_str(), MB_YESNO | MB_ICONQUESTION);
-    g_crashrep = r == IDYES ? 1 : 0;
-    ini_set(L"Launcher", L"CrashReports", g_crashrep ? L"1" : L"0");
+// first start: ask once whether crash reports may be sent (changeable in the launcher settings) - a card in the
+// launcher drawn over the page (paint calls it last), not a Windows message box
+static void set_crash_consent(bool yes) {
+    g_crashrep = yes ? 1 : 0;
+    ini_set(L"Launcher", L"CrashReports", yes ? L"1" : L"0");
+    if (yes) maybe_report_crashes();
 }
 
 // Windows: the desktop. Wine / Proton: the desktop is hidden inside the Wine prefix - the launcher's own folder
@@ -1758,17 +1759,17 @@ static void draw_app(int h) {
 
     // animations
     auto row = [](int y, int k, const wchar_t* title, const wchar_t* hint, bool on, std::function<void()> fn) {
-        RECT ar = R(MX, y, MW, 54);
+        RECT ar = R(MX, y, MW, 48);
         fill(ar, mix(C_CARD, C_CARD2, anim(akey(26, k, 0), hover(ar) ? 1.0 : 0.0, 16)), 12);
-        text(R(MX + 18, y + 7, MW - 100, 20), tr(title), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
-        text(R(MX + 18, y + 28, MW - 100, 20), tr(hint), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        draw_toggle(MX + MW - 60, y + 16, on);
+        text(R(MX + 18, y + 5, MW - 100, 20), tr(title), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE);
+        text(R(MX + 18, y + 25, MW - 100, 18), tr(hint), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_toggle(MX + MW - 60, y + 13, on);
         click(ar, fn);
     };
     row(410, 0, L"Animations", L"Smooth fades and movements. Turn off on very slow PCs.", g_anims, [] { g_anims = !g_anims; save_app_prefs(); });
-    row(470, 1, L"Experimental chapters", L"Try Chapters 3-5: you see each other, but doors, puzzles and items aren't shared.", g_experimental, [] { set_experimental(!g_experimental); });
-    row(530, 2, L"Several games at once", L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
-    row(650, 5, L"Co-op without the launcher", L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", g_coop_always, [] {
+    row(462, 1, L"Experimental chapters", L"Try Chapters 3-5: you see each other, but doors, puzzles and items aren't shared.", g_experimental, [] { set_experimental(!g_experimental); });
+    row(514, 2, L"Several games at once", L"For Nucleus Co-op / split screen: PLAY can start more game windows.", g_multi, [] { g_multi = !g_multi; save_app_prefs(); });
+    row(618, 5, L"Co-op without the launcher", L"Also when the game is started from Steam (e.g. Steam Deck game mode). Off: only via PLAY here.", g_coop_always, [] {
         g_coop_always = !g_coop_always; save_app_prefs();
         for (auto& ch : g_ch) if (!inst_ver(ch).empty()) write_launch_mark(ch);   // "always" / back to a stale time
         if (!g_coop_always) for (auto& ch : g_ch) if (!inst_ver(ch).empty() && !game_running(ch)) {
@@ -1776,8 +1777,8 @@ static void draw_app(int h) {
             if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, "0\n", 2, &w, nullptr); CloseHandle(f); }
         }
     });
-    if (FEATURE_ONLINE) row(710, 4, L"Send crash reports", L"After a crash, send the error and the mod log to the developers (no user names).", g_crashrep == 1, [] { g_crashrep = g_crashrep == 1 ? 0 : 1; save_app_prefs(); if (g_crashrep == 1) maybe_report_crashes(); });
-    row(590, 3, L"Automatic updates", L"Install a new version by itself when the launcher starts.", g_autoupd, [] { g_autoupd = !g_autoupd; save_app_prefs(); if (g_autoupd) maybe_auto_update(); });
+    if (FEATURE_ONLINE) row(670, 4, L"Send crash reports", L"After a crash, send the error and the mod log to the developers (no user names).", g_crashrep == 1, [] { g_crashrep = g_crashrep == 1 ? 0 : 1; save_app_prefs(); if (g_crashrep == 1) maybe_report_crashes(); });
+    row(566, 3, L"Automatic updates", L"Install a new version by itself when the launcher starts.", g_autoupd, [] { g_autoupd = !g_autoupd; save_app_prefs(); if (g_autoupd) maybe_auto_update(); });
     (void)h;
 }
 
@@ -2145,6 +2146,36 @@ static void save_window_size() {
     ini_set(L"Launcher", L"WinH", std::to_wstring((int)((r.bottom - r.top) / g_dpi)));
     ini_set(L"Launcher", L"WinMax", IsZoomed(g_wnd) ? L"1" : L"0");
 }
+static void draw_crash_consent(int w_px, int h_px) {
+    if (!FEATURE_ONLINE || g_crashrep != -1) return;
+    g_hits.push_back({ { 0, 0, w_px, h_px }, [] {}, false });          // the page below doesn't react meanwhile
+    {   // dim the page behind the card
+        BITMAPINFO bi = {}; bi.bmiHeader = { sizeof(BITMAPINFOHEADER), 1, 1, 1, 32, BI_RGB };
+        void* bits = nullptr;
+        HBITMAP b = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (b && bits) {
+            *(DWORD*)bits = 0;
+            HDC m = CreateCompatibleDC(g_dc);
+            HGDIOBJ o = SelectObject(m, b);
+            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 150, 0 };
+            AlphaBlend(g_dc, 0, 0, w_px, h_px, m, 0, 0, 1, 1, bf);
+            SelectObject(m, o); DeleteDC(m);
+        }
+        if (b) DeleteObject(b);
+    }
+    const int CW = 540, CH = 268;
+    int lw = (int)(w_px / g_s), lh = (int)(h_px / g_s);
+    int x = std::max(MX, (lw - CW) / 2), y = std::max(80, (lh - CH) / 2 - 20);
+    RECT card = R(x, y, CW, CH);
+    fill(card, C_CARD2, 16);
+    frame(card, accent(), 16, 2);
+    text(R(x + 28, y + 24, CW - 56, 18), tr(L"CRASH REPORTS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(x + 28, y + 44, CW - 56, 30), tr(L"Send crash reports to the developers?"), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    text(R(x + 28, y + 86, CW - 56, 100), tr(L"When the game crashes, the launcher can send the error message, the end of the mod's log, the mod version and your Windows version to the PoppyCoop developers. User names in folder paths are removed. It helps us fix crashes. You can change this any time in the launcher settings."), F_SMALL, C_DIM);
+    button(x + 28, y + CH - 64, 220, 40, tr(L"Yes, send them"), Btn::Primary, [] { set_crash_consent(true); });
+    button(x + 260, y + CH - 64, 120, 40, tr(L"No"), Btn::Ghost, [] { set_crash_consent(false); });
+}
+
 static void draw_title_bar(int w, int tb) {
     RECT bar = { 0, -tb, w, 0 };
     fill(bar, C_SIDE);
@@ -2239,6 +2270,7 @@ static void paint(HDC wdc, int w, int h) {
             g_page = Page::News; g_focus = {}; g_capture = -1;
         });
 
+    draw_crash_consent(w, h - tb);
     if (tb) draw_title_bar(w, tb);
     SetViewportOrgEx(dc, 0, 0, nullptr);
 
@@ -2923,7 +2955,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     ShowWindow(g_wnd, show);
     UpdateWindow(g_wnd);
     if (after_update) toast(tr(L"Updated to v") + MOD_VERSION);
-    if (!g_test) { ask_crash_consent(); maybe_report_crashes(); }
+    if (!g_test) maybe_report_crashes();
     SetTimer(g_wnd, TIMER_POLL, 1000, nullptr);
     SetTimer(g_wnd, TIMER_CARET, 530, nullptr);
     start_probe(false);
