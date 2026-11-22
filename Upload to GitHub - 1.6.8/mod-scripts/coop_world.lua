@@ -793,6 +793,10 @@ local function auto_follow_tick()
 end
 
 local function receive(e, from)
+    -- Chapter 1's GrabPack box (GrabPackDoor): never synced. Leaving a game for the main menu fires "open" on it
+    -- while the level is torn down, and that reached a friend who had just started a New Game (the box stood
+    -- open). It isn't needed either: the blue hand itself is given to every player.
+    if e.path and e.path:find("GrabPackDoor", 1, true) then return end
     trace("RECV from %s: %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
     if P.Fresh.batch[from] and P.fresh() then
         trace("DROP old progress from %s (new game): %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
@@ -1179,6 +1183,10 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     if replaying > 0 or not Coop.active() or not path then return end
     if is_checkpoint_event(path, fnname) then return end      -- see is_checkpoint_event
+    if fnname == "Pick Up Object" and cname:find("/Breakers%.") and P.Brk then     -- Storage breakers (see P.Brk)
+        pcall(P.Brk.picked, obj)
+        return
+    end
 
     if DEATH_SET[fnname] and cname:find("PlayerBP", 1, true) then
         if not Game.dead then
@@ -1263,6 +1271,7 @@ local function on_local_call(cname, fnname, ctx, ...)
         return
     end
     if SYNC_ACT and ACT_SET[fnname] and is_level_placed(path) then
+        if path:find("GrabPackDoor", 1, true) then return end      -- (the GrabPack box: see receive)
         if not args then trace("  not replicable: %s", tostring(why)); return end
         share({ kind = "act", path = path, fn = fnname, args = args })
     end
@@ -2204,3 +2213,147 @@ table.insert(P.Handlers.tick, function(dt, have)
 end)
 table.insert(P.LevelsChanged, function() P.VolNeedScan = true end)
 table.insert(P.LevelsChanged, function() if P.assets_changed then pcall(P.assets_changed) end end)
+
+------------------------------------------------------------------ Chapter 1 Storage breakers
+-- The red hand room (05_Storage): a RandomSpawner puts 3 breakers ("batteries") on 3 of 16 spawn points - a
+-- different 3 in every game, and the spawned actors have different names everywhere. Synced by the spawn
+-- points (level-placed, same names in every game): the first layout anyone reports is the team's (lower
+-- player id wins a tie), every game moves its breakers onto those points, and a breaker picked up anywhere
+-- disappears at that point for everyone (also later, after a reload: "taken").
+P.Brk = { lay = nil, lay_from = nil, taken = {}, at = -100, pts = nil, pts_gen = -1, EVERY = 1.5, NEAR = 120, where = {} }
+P.Brk.brk_points = function()
+    if P.Brk.pts and P.Brk.pts_gen == (P.LevelGen or 0) then return P.Brk.pts end
+    local pts = {}
+    for _, a in ipairs(try(FindAllOf, "R_SpawnPoints_C") or {}) do
+        pcall(function()
+            if a:IsValid() then
+                local l = a:K2_GetActorLocation()
+                pts[#pts + 1] = { name = a:GetFName():ToString(), x = l.X, y = l.Y, z = l.Z }
+            end
+        end)
+    end
+    P.Brk.pts, P.Brk.pts_gen = pts, P.LevelGen or 0
+    return pts
+end
+P.Brk.brk_nearest = function(l)
+    local best, bd
+    for _, p in ipairs(P.Brk.brk_points()) do
+        local d = (p.x - l.X) ^ 2 + (p.y - l.Y) ^ 2 + (p.z - l.Z) ^ 2
+        if not bd or d < bd then best, bd = p, d end
+    end
+    return best, bd and math.sqrt(bd)
+end
+-- our breakers this frame: { { a = actor, pt = spawn point or nil } } (looked up fresh, never kept)
+P.Brk.brk_mine = function()
+    local out = {}
+    for _, a in ipairs(try(FindAllOf, "Breakers_C") or {}) do
+        pcall(function()
+            -- (spawned breakers live in the persistent level; the fixed ones elsewhere in Storage are never
+            -- near a spawn point, so only breakers ON a spawn point count)
+            if a:IsValid() then
+                local l = a:K2_GetActorLocation()
+                local pt, d = P.Brk.brk_nearest(l)
+                if pt and d and d < P.Brk.NEAR then
+                    out[#out + 1] = { a = a, pt = pt }
+                    P.Brk.where[tostring(a:GetAddress())] = pt.name    -- (picked up: it's in the hand then, see picked)
+                end
+            end
+        end)
+    end
+    return out
+end
+P.Brk.storage_loaded = function()
+    for _, sl in pairs(Slots) do if sl.pkg == "05_Storage" and sl.was_loaded then return true end end
+    return false
+end
+P.Brk.brk_send_layout = function(to)
+    if not P.Brk.lay then return end
+    local list = table.concat(P.Brk.lay, ",")
+    if to then Coop.send_to(to, "brklay", list) else Coop.send_event("brklay", list) end
+    for n in pairs(P.Brk.taken) do if to then Coop.send_to(to, "brktake", n) else Coop.send_event("brktake", n) end end
+end
+P.Brk.brk_apply = function()
+    local mine = P.Brk.brk_mine()
+    if #mine == 0 then return end
+    if not P.Brk.lay then
+        -- we are the first: our spawner's choice is the team's
+        local lay = {}
+        for _, b in ipairs(mine) do if b.pt then lay[#lay + 1] = b.pt.name end end
+        if #lay == 0 then return end
+        table.sort(lay)
+        P.Brk.lay, P.Brk.lay_from = lay, Net.myid
+        log("storage breakers: our layout is the team's (%s)", table.concat(lay, ","))
+        if Coop.active() then P.Brk.brk_send_layout() end
+        return
+    end
+    local want, used = {}, {}
+    for _, n in ipairs(P.Brk.lay) do want[n] = true end
+    for _, b in ipairs(mine) do if b.pt and want[b.pt.name] then used[b.pt.name] = true end end
+    local pts = {}
+    for _, p in ipairs(P.Brk.brk_points()) do pts[p.name] = p end
+    for _, b in ipairs(mine) do
+        if not (b.pt and want[b.pt.name]) then
+            -- not on a team point: move it onto a free one
+            for _, n in ipairs(P.Brk.lay) do
+                if not used[n] and pts[n] then
+                    used[n] = true
+                    local p = pts[n]
+                    pcall(function() b.a:K2_SetActorLocation({ X = p.x, Y = p.y, Z = p.z }, false, {}, true) end)
+                    b.pt = p
+                    log("storage breaker moved to the team's spot %s", n)
+                    break
+                end
+            end
+        end
+    end
+    for _, b in ipairs(mine) do
+        if b.pt and P.Brk.taken[b.pt.name] then
+            local a = b.a
+            replaying = replaying + 1
+            pcall(function() a:K2_DestroyActor() end)
+            replaying = replaying - 1
+            log("storage breaker at %s was picked up by a friend: removed", b.pt.name)
+        end
+    end
+end
+P.Brk.picked = function(obj)
+    -- (the hook runs after the pickup: the breaker already hangs in the hand - use where it lay)
+    local name = P.Brk.where[tostring(try(function() return obj:GetAddress() end))]
+    if not name then
+        local l = try(function() return obj:K2_GetActorLocation() end)
+        local pt, d = l and P.Brk.brk_nearest(l)
+        if pt and d and d <= P.Brk.NEAR then name = pt.name end
+    end
+    if not name then return end
+    P.Brk.taken[name] = true
+    Coop.send_event("brktake", name)
+    log("storage breaker picked up at %s: removed for everyone", name)
+end
+P.Brk.brk_name_ok = function(n) return type(n) == "string" and n:match("^[%w_]+$") ~= nil and #n <= 64 end
+Coop.on("brklay", function(from, rest)
+    if P.CHAPTER ~= 1 or P.old_progress(from) then return end
+    local lay = {}
+    for n in tostring(rest or ""):gmatch("[^,]+") do if P.Brk.brk_name_ok(n) then lay[#lay + 1] = n end end
+    if #lay == 0 or #lay > 16 then return end
+    if P.Brk.lay and P.Brk.lay_from and P.Brk.lay_from >= 0 and P.Brk.lay_from <= from then return end   -- ours / an earlier one wins
+    table.sort(lay)
+    P.Brk.lay, P.Brk.lay_from, P.Brk.at = lay, from, -100
+    log("storage breakers: using player %d's layout (%s)", from, table.concat(lay, ","))
+end)
+Coop.on("brktake", function(from, n)
+    if P.CHAPTER ~= 1 or P.old_progress(from) or not P.Brk.brk_name_ok(n) then return end
+    P.Brk.taken[n] = true
+    P.Brk.at = -100                        -- apply at the next tick
+end)
+table.insert(P.Handlers.join, function(id) if P.CHAPTER == 1 then P.Brk.brk_send_layout(id) end end)
+table.insert(P.NewGameReset, function() P.Brk.lay, P.Brk.lay_from, P.Brk.taken, P.Brk.where = nil, nil, {}, {} end)
+table.insert(P.Handlers.unload, function() P.Brk.where = {} end)
+table.insert(P.Handlers.tick, function(dt, have)
+    if P.CHAPTER ~= 1 or not have or P.quiet() then return end
+    local now = P.game_time()
+    if now - P.Brk.at < P.Brk.EVERY then return end
+    P.Brk.at = now
+    if not P.Brk.storage_loaded() then return end
+    -- (moving / removing actors: from the late queue, outside the actor tick)
+    if P.late then P.late(function() pcall(P.Brk.brk_apply) end, "storage breakers") else pcall(P.Brk.brk_apply) end
+end)

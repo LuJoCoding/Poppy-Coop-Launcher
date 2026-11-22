@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.6.7.zip`**
+Download **`PoppyCoop_Launcher_1.6.8.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,10 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.8
+- **Chapter 1: the breakers ("batteries") in the red hand room are synced.** The game puts them on random spots, different in every game. Now everyone gets the same spots, and a breaker one player picks up disappears for everyone.
+- **Fixed (Chapter 1): the blue hand box stood open after "New Game".** A friend leaving their game for the main menu opened it. The box is no longer synced (the blue hand itself is still given to everyone).
 
 ### 1.6.7
 - **Fixed (Chapter 1): both players crashed in the Steam Hallway when Storage loaded** (the area with the red hand). Walking through the hallway unloads the power room; the mod still held on to parts of it and read them after the game had freed them. It now looks everything up fresh.

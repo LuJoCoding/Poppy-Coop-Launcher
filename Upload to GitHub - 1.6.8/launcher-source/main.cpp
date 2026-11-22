@@ -380,6 +380,10 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Chapter 1: breakers and blue hand box",
+      L"The breakers in the red hand room lie on the same spots for everyone, and one picked up is gone for everyone. The blue hand box no longer stands open after New Game.",
+      L"Kapitel 1: Breaker und Blaue-Hand-Box",
+      L"Die Breaker im Raum mit der roten Hand liegen bei allen an denselben Stellen, und ein aufgehobener ist bei allen weg. Die Box der blauen Hand steht nach Neues Spiel nicht mehr offen." },
     { false, L"Chapter 1: Steam Hallway crash fixed",
       L"Both players crashed in the Steam Hallway when the Storage area (red hand) loaded. Fixed.",
       L"Kapitel 1: Absturz im Dampfgang behoben",
