@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.6.6"   -- 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.6.7"   -- 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -960,7 +960,13 @@ local function find_param(mat)
     return found
 end
 local function tint_base()
-    if valid(Tint.base) then return Tint.base end
+    -- looked up by its path every time: the paint is a level's material in Chapter 1 (MI_PlasticYellow) and is
+    -- freed when that area unloads - the cached object read freed memory (crash when Storage loaded, 1.6.x)
+    if Tint.base_path then
+        local o = try(StaticFindObject, Tint.base_path)
+        if valid(o) then Tint.base = o; return o end
+        Tint.base = nil
+    end
     if game_time < Tint.next_try or Tint.tries >= 12 then return nil end
     Tint.tries = Tint.tries + 1
     Tint.next_try = game_time + 2.5
@@ -996,6 +1002,7 @@ local function tint_base()
         Tint.param = find_param(Tint.base)
         local fn = try(function() return Tint.base:GetFullName() end)
         local path = fn and fn:match("^%S+%s+(%S+)$")
+        Tint.base_path = path
         if path then color_cache_write(path) end
         log("player paint: %s (colour parameter: %s)", tostring(path), tostring(Tint.param))
         return Tint.base
@@ -1011,18 +1018,15 @@ local function paint(actor, key)
     local comp = try(function() return actor.StaticMeshComponent end)
     if not comp then return false end
     local rgb = TARGET_RGB[key] or TARGET_RGB.yellow
-    local mid = Tint.mids[key]
-    if valid(mid) then
-        pcall(function() comp:SetMaterial(0, mid) end)
-        return true
-    end
+    -- (no shared cache of tinted materials: one belonged to a figure part that can be gone - each part gets its own)
+    local mid
     if Tint.param and Tint.mid_ok and FName then
         mid = try(function() return comp:CreateDynamicMaterialInstance(0, base, FName("None")) end)
         if valid(mid) then
             local ok = pcall(function() mid:SetVectorParameterValue(FName(Tint.param), { R = rgb[1], G = rgb[2], B = rgb[3], A = 1.0 }) end)
             -- Chapter 1's MI_Yellow also glows yellow ("Emissive Color"), which drowns the colour in the dark
             if ok then pcall(function() mid:SetVectorParameterValue(FName("Emissive Color"), { R = rgb[1] * 0.5, G = rgb[2] * 0.5, B = rgb[3] * 0.5, A = 1.0 }) end) end
-            if ok then Tint.mids[key] = mid; return true end
+            if ok then return true end
         end
         Tint.mid_ok = false                          -- don't try again this session: plain paint instead
         log("player paint: tinting not available - using the plain toy paint")
@@ -1227,7 +1231,10 @@ end
 local function f2_play(f, name, rate)
     if f.anim ~= name then
         f.anim = name
-        pcall(function() f.body.SkeletalMeshComponent:PlayAnimation(F2A["anim_" .. name], true) end)
+        -- looked up by path (the cached asset may have been dropped / freed with an area: Game.assets_changed)
+        local an = F2_ANIMS[name]
+        local anim = an and try(StaticFindObject, F2_ANIM_DIR .. an .. "." .. an)
+        if anim then pcall(function() f.body.SkeletalMeshComponent:PlayAnimation(anim, true) end) else f.anim = nil end
     end
     if rate and math.abs((f.rate or 1) - rate) > 0.05 then
         f.rate = rate
@@ -3059,6 +3066,16 @@ function world_unloading()
     for _, h in ipairs(Handlers.unload) do pcall(h) end
     log("level loading: cleared cached objects")
 end
+-- An area is about to load / unload (streaming volume, level sync, power room...): the engine collects garbage
+-- then, and assets cached here that nothing in the game references any more are freed. Forget them all now;
+-- they are looked up again by path when needed (touching a freed one crashed UE4SS - CH1 Storage, 1.6.x).
+Game.assets_changed = function()           -- (a field: main.lua is at Lua's 200-locals limit)
+    for k in pairs(Assets) do Assets[k] = nil end
+    for k in pairs(F2A) do F2A[k] = nil end
+    for k in pairs(G1A) do G1A[k] = nil end
+    for k in pairs(G1K) do G1K[k] = nil end
+    Tint.base, Tint.mids, Tint.tries, Tint.next_try = nil, {}, 0, 0
+end
 -- same check as the player tick, for code that runs outside it (late queue): false = the world changed
 Game.world_check = function()
     local w = SafeUE.world()
@@ -3314,7 +3331,7 @@ load_config()
 log("v%s loaded from %s | chapter %d%s | window %d | mode=%s name=%s host=%s:%d", VERSION, MOD_DIR, CHAPTER, EXPERIMENTAL and " (experimental)" or "", SLOT + 1, Config.mode, Config.name, Config.host_ip, Config.port)
 
 -- Expose for sibling modules (doors/puzzles etc. live in separate files)
-_G.PoppyCoop = { crumb = crumb, late = late, Late = Late, Coop = Coop, Net = Net, Game = Game, Config = Config, log = log, valid = valid, try = try, CHAPTER = CHAPTER, load_async = load_async,
+_G.PoppyCoop = { assets_changed = Game.assets_changed, crumb = crumb, late = late, Late = Late, Coop = Coop, Net = Net, Game = Game, Config = Config, log = log, valid = valid, try = try, CHAPTER = CHAPTER, load_async = load_async,
                  Handlers = Handlers, MOD_DIR = MOD_DIR, Puppets = Puppets, Perf = Perf, Tint = Tint, G1A = G1A, SafeUE = SafeUE, G1_SHIFT = G1_SHIFT, M1_GRIP = M1_GRIP, G1_TIP = G1_TIP, game_time = function() return game_time end,
                  EXPERIMENTAL = EXPERIMENTAL, SLOT = SLOT }
 _G.PoppyCoop.chat_send = Ping.say

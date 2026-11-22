@@ -45,6 +45,16 @@ P.LevelsChanged = {}     -- functions run when a streamed area loaded / unloaded
 P.Quiet = { untilT = -1, load = false, MAX_DEATH = 60, AFTER_LOAD = 3, RELEASE = 4 }
 P.hush = function(secs) P.Quiet.untilT = math.max(P.Quiet.untilT, os.clock() + secs) end
 P.quiet = function() return P.Quiet.load or os.clock() < P.Quiet.untilT end
+-- level lists of every streaming volume, by address, read while nothing is loading (see "Load Levels" hook)
+P.VolLists = {}
+P.VolNeedScan = true
+-- a level slot's object, looked up fresh by its path (never a kept object: see scan_slots)
+P.sobj = function(sl)
+    if not sl or not sl.path then return nil end
+    local o = P.try(StaticFindObject, sl.path)
+    if o and P.valid(o) then return o end
+    return nil
+end
 P.LATE_CLASSES = { LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
@@ -339,7 +349,9 @@ find_actor = function(path)
     if not valid(parent) then return nil end
     local paddr = try(function() return parent:GetAddress() end)
     local c = ChildCache[path]
-    if c and c.paddr == paddr then return c.a end
+    -- (an area reload can put the new parent at the old address: the cached child is only trusted within the
+    -- same level generation, see P.LevelsChanged)
+    if c and c.paddr == paddr and c.lgen == (P.LevelGen or 0) then return c.a end
     local found
     pcall(function()
         local cls = StaticFindObject("/Script/Engine.ChildActorComponent")
@@ -353,7 +365,7 @@ find_actor = function(path)
             end
         end
     end)
-    ChildCache[path] = found and { a = found, paddr = paddr } or nil
+    ChildCache[path] = found and { a = found, paddr = paddr, lgen = P.LevelGen or 0 } or nil
     return found
 end
 
@@ -1090,7 +1102,21 @@ local function on_local_call(cname, fnname, ctx, ...)
     local pf = P.Perf
     if pf then pf.hooks = pf.hooks + 1; pf.by[hk] = (pf.by[hk] or 0) + 1 end
     if Hot[hk] then return end
-    if P.quiet() and not CP_FNS_ALL[fnname] and not DEATH_SET[fnname] and fnname ~= "Load Levels" then return end
+    -- Chapter 1 / 2 streaming volume (walking through it loads the next area): the volume may sit in an area
+    -- that this very call unloads - reading it afterwards (its name, its level lists) read freed memory and
+    -- crashed UE4SS for both players at the same spot. Its lists are read beforehand (P.cache_volumes); here
+    -- only its address is compared (no engine read).
+    if fnname == "Load Levels" and cname:find("LevelStreamingVolume", 1, true) then
+        local okg, o = pcall(function() return ctx:get() end)
+        local ad = okg and o and try(function() return tostring(o:GetAddress()) end)
+        local v = ad and P.VolLists[ad]
+        if v then pcall(claim_levels, v.load, true); pcall(claim_levels, v.unload, false) end
+        P.hush(1.5)                         -- areas are changing now (see P.Quiet)
+        if P.assets_changed then pcall(P.assets_changed) end   -- (main.lua: cached assets may be freed now)
+        P.VolNeedScan = true
+        return
+    end
+    if P.quiet() and not CP_FNS_ALL[fnname] and not DEATH_SET[fnname] then return end
     local sec = math.floor(os.clock())
     if sec ~= HotSec then HotSec = sec; HotCount = {} end
     local c = (HotCount[hk] or 0) + 1
@@ -1609,12 +1635,18 @@ local function scan_slots()
             if #list == 0 then quick = false end
         end
         if not quick then list = FindAllOf("LevelStreaming") or {}; SlotListFullAt = now; full = true end
-        SlotList, SlotListAt, SlotIds, SlotListStale = list, now, {}, false
+        -- only PATHS are kept: a slot object inside an area that unloads is freed, and the kept object crashed
+        -- UE4SS a moment later (CH1 power room unloading at the Steam Hallway, 1.6.x) - looked up fresh below
+        local paths = {}
+        for _, o in ipairs(list) do local pth = valid(o) and fullpath(o); if pth then paths[#paths + 1] = pth end end
+        SlotList, SlotListAt, SlotIds, SlotListStale = paths, now, {}, false
     end
-    for i, ls in ipairs(SlotList) do
+    for i, pth in ipairs(SlotList) do
+        local ls = try(StaticFindObject, pth)
+        if not valid(ls) then ls = nil end
         local n = SlotIds[i]
-        if n == nil then n = valid(ls) and slot_id(ls) or false; SlotIds[i] = n end   -- name looked up once per list
-        if n and not seen[n] then
+        if n == nil then n = ls and slot_id(ls) or false; SlotIds[i] = n end   -- name looked up once per list
+        if ls and n and not seen[n] then
             seen[n] = true
             local load = try(function() return ls:ShouldBeLoaded() end) and true or false
             local loaded = try(function() return ls:IsLevelLoaded() end) and true or false
@@ -1627,7 +1659,7 @@ local function scan_slots()
                 if not load then Ours[n] = nil end
                 trace("SLOT %s (%s) game set load=%s", n, tostring(s.pkg), tostring(load))
             end
-            s.obj, s.last_load = ls, load
+            s.obj, s.path, s.last_load = ls, pth, load
             -- every engine call costs ~0.1 ms and Chapter 2 has ~30 slots: visibility only matters for slots that
             -- are (being) loaded, most are idle
             if load or loaded then
@@ -1709,12 +1741,12 @@ protect_levels = function(path)
     if not friend_only then return end
     local restored = {}
     for n, s in pairs(Slots) do
-        if s.want and not Ours[n] and valid(s.obj) then           -- one of our own areas
-            local load = try(function() return s.obj:ShouldBeLoaded() end)
-            local vis = try(function() return s.obj.bShouldBeVisible end)
+        if s.want and not Ours[n] and P.sobj(s) then           -- one of our own areas
+            local load = try(function() return P.sobj(s):ShouldBeLoaded() end)
+            local vis = try(function() return P.sobj(s).bShouldBeVisible end)
             if load == false or (s.vis_want and vis == false) then
-                pcall(function() s.obj:SetShouldBeLoaded(true) end)
-                if s.vis_want then pcall(function() s.obj:SetShouldBeVisible(true) end) end
+                pcall(function() P.sobj(s):SetShouldBeLoaded(true) end)
+                if s.vis_want then pcall(function() P.sobj(s):SetShouldBeVisible(true) end) end
                 restored[#restored + 1] = tostring(s.pkg or n)
             end
         end
@@ -1724,9 +1756,10 @@ end
 
 local function set_slot(n, on)
     local s = Slots[n]
-    if not valid(s.obj) then return end
-    pcall(function() s.obj:SetShouldBeLoaded(on) end)
-    pcall(function() s.obj:SetShouldBeVisible(on) end)
+    if not P.sobj(s) then return end
+    if P.assets_changed then pcall(P.assets_changed) end      -- an area loads / unloads (see main.lua)
+    pcall(function() P.sobj(s):SetShouldBeLoaded(on) end)
+    pcall(function() P.sobj(s):SetShouldBeVisible(on) end)
     s.last_load = on
     -- we unload a level ourselves: queued class hooks / the level list may hold its objects - drop them now,
     -- not only when the next level count (1 s later) notices
@@ -1761,15 +1794,15 @@ local function sync_levels()
         if need[n] and not s.last_load then
             set_slot(n, true); Ours[n] = true
             log("loading %s (%s) for the other player", n, need[n])
-        elseif need[n] and Ours[n] and s.last_load and not s.vis and valid(s.obj) then
-            pcall(function() s.obj:SetShouldBeVisible(true) end)
-        elseif need[n] and not Ours[n] and s.last_load and not s.vis_want and valid(s.obj) then
+        elseif need[n] and Ours[n] and s.last_load and not s.vis and P.sobj(s) then
+            pcall(function() P.sobj(s):SetShouldBeVisible(true) end)
+        elseif need[n] and not Ours[n] and s.last_load and not s.vis_want and P.sobj(s) then
             -- our game hid this area (walked past a visibility trigger) but a friend is in it: an
             -- invisible area has no floor, so teleporting there (F6) dropped players out of the map
-            pcall(function() s.obj:SetShouldBeVisible(true) end)
+            pcall(function() P.sobj(s):SetShouldBeVisible(true) end)
             s.vis_forced = true
             log("showing %s (%s) again for the other player", n, need[n])
-        elseif not need[n] and not Ours[n] and s.vis_forced and s.last_load and valid(s.obj) then
+        elseif not need[n] and not Ours[n] and s.vis_forced and s.last_load and P.sobj(s) then
             local now = P.game_time()
             s.unshown_since = s.unshown_since or now
             if now - s.unshown_since >= 10 then
@@ -1777,7 +1810,7 @@ local function sync_levels()
                 if standing ~= false and s.pkg == standing then
                     s.vis_forced, s.unshown_since = nil, nil          -- we walked in: it's ours now
                 elseif standing ~= false then
-                    pcall(function() s.obj:SetShouldBeVisible(false) end)
+                    pcall(function() P.sobj(s):SetShouldBeVisible(false) end)
                     s.vis_forced, s.unshown_since = nil, nil
                     log("hiding %s (%s) again: nobody needs it", n, tostring(s.pkg))
                 end
@@ -1814,12 +1847,12 @@ P.level_prep = function(id)
     for slot, pkg in pairs(set) do
         local n = resolve_slot(slot, pkg)
         local s = n and Slots[n]
-        if s and valid(s.obj) then
+        if s and P.sobj(s) then
             if not s.last_load then
                 set_slot(n, true); Ours[n] = true
                 log("loading %s (%s) for the teleport", n, pkg)
             elseif not s.vis_want and not Ours[n] then
-                pcall(function() s.obj:SetShouldBeVisible(true) end)
+                pcall(function() P.sobj(s):SetShouldBeVisible(true) end)
                 s.vis_forced = true
             end
             -- only wait for the main areas: sub-areas inside a streamed area (RevokedToys_CHP2:LevelStreaming...)
@@ -2151,3 +2184,23 @@ table.insert(P.Handlers.restart, function()
     P.Quiet.load = false
     P.Quiet.untilT = os.clock() + P.Quiet.AFTER_LOAD     -- (also ends a death's quiet time)
 end)
+
+-- streaming volumes' level lists (read here, outside their "Load Levels" call: see on_local_call)
+P.cache_volumes = function()
+    P.VolNeedScan = false
+    local t = {}
+    for _, a in ipairs(try(FindAllOf, "BP_LevelStreamingVolume_C") or {}) do
+        pcall(function()
+            if a:IsValid() then
+                t[tostring(a:GetAddress())] = { load = name_array(a, "LevelsToLoad"), unload = name_array(a, "LevelsToUnload") }
+            end
+        end)
+    end
+    P.VolLists = t
+end
+table.insert(P.Handlers.restart, function() P.VolNeedScan = true end)
+table.insert(P.Handlers.tick, function(dt, have)
+    if have and P.VolNeedScan and not P.quiet() then pcall(P.cache_volumes) end
+end)
+table.insert(P.LevelsChanged, function() P.VolNeedScan = true end)
+table.insert(P.LevelsChanged, function() if P.assets_changed then pcall(P.assets_changed) end end)

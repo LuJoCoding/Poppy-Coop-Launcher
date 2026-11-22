@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.6.6.zip`](Upload%20to%20GitHub%20-%201.6.6/PoppyCoop_Launcher_1.6.6.zip)**
-(folder `Upload to GitHub - 1.6.6`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.6.7.zip`](Upload%20to%20GitHub%20-%201.6.7/PoppyCoop_Launcher_1.6.7.zip)**
+(folder `Upload to GitHub - 1.6.7`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,10 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.7
+- **Fixed (Chapter 1): both players crashed in the Steam Hallway when Storage loaded** (the area with the red hand). Walking through the hallway unloads the power room; the mod still held on to parts of it and read them after the game had freed them. It now looks everything up fresh.
+- The players' figure paint and animations are looked up fresh too, so they can't point at something an unloaded area took with it.
 
 ### 1.6.6
 - **Fixed (Chapter 1): the power room short circuit only happened for the player at the scanner.** When one player puts the hand on the scanner and the power shorts out, it now shorts out for everyone.
