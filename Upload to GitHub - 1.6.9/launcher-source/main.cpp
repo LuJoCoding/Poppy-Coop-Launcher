@@ -380,6 +380,10 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Load Game, key, toy, breakers",
+      L"Chapter 1: Load Game starts at the team's furthest checkpoint. Huggy's key and the Make-A-Friend toy are gone for everyone once taken (also in Speedrun mode), breaker colours match, the vent door opens for all. Chapter 2: a crash fixed.",
+      L"Spiel laden, Schlüssel, Spielzeug, Breaker",
+      L"Kapitel 1: Spiel laden startet am weitesten Checkpoint des Teams. Huggys Schlüssel und das Make-A-Friend-Spielzeug sind für alle weg, sobald einer sie nimmt (auch im Speedrun-Modus), die Breaker-Farben stimmen, die Lüftungstür geht bei allen auf. Kapitel 2: ein Absturz behoben." },
     { false, L"Chapter 1: breakers and blue hand box",
       L"The breakers in the red hand room lie on the same spots for everyone, and one picked up is gone for everyone. The blue hand box no longer stands open after New Game.",
       L"Kapitel 1: Breaker und Blaue-Hand-Box",
@@ -784,7 +788,7 @@ static void browse_folder(Chapter& c) {
 static void speedrun_preset(Chapter& c, int changed) {
     if (std::wstring(c.sync[changed].id) != L"speedrun") return;
     bool on = c.sync[changed].value;
-    static const wchar_t* ON_IDS[] = { L"sync_activations", L"sync_inventory", L"sync_hands", L"low_gfx" };
+    static const wchar_t* ON_IDS[] = { L"sync_activations", L"sync_destroy", L"sync_inventory", L"sync_hands", L"low_gfx" };
     std::vector<SyncOpt> def = default_sync();
     for (size_t i = 0; i < c.sync.size(); i++) {
         if ((int)i == changed) continue;

@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.6.8.zip`](Upload%20to%20GitHub%20-%201.6.8/PoppyCoop_Launcher_1.6.8.zip)**
-(folder `Upload to GitHub - 1.6.8`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.6.9.zip`](Upload%20to%20GitHub%20-%201.6.9/PoppyCoop_Launcher_1.6.9.zip)**
+(folder `Upload to GitHub - 1.6.9`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,14 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.9
+- **Chapter 1: "Load Game" starts at the team's furthest checkpoint.** If a friend is further (e.g. at Make-A-Friend), pressing Load Game in the main menu loads that checkpoint for you, at its normal spawn point. Only on that button - nothing happens by itself after a death.
+- **Chapter 1: the breakers in the red hand room have the same colours on the same spots for everyone.**
+- **Chapter 1: Huggy's key and other picked-up things (the Make-A-Friend toy...) disappear for everyone** once one player takes them. This now also works in Speedrun mode.
+- **Chapter 1: the vent door that opens when Huggy is triggered opens for everyone.**
+- **Fixed (Chapter 2): a crash where the mod asked the game about a door part from inside a game event.**
+- Fixed: after an area loaded, friends' figures in Chapter 2 could lose their cable parts.
 
 ### 1.6.8
 - **Chapter 1: the breakers ("batteries") in the red hand room are synced.** The game puts them on random spots, different in every game. Now everyone gets the same spots, and a breaker one player picks up disappears for everyone.

@@ -33,7 +33,10 @@ P.Pad = { CLASS = "LeftHandAccessPad_C", LIVE = { ["Activate With Hand"] = true,
 -- is further. The friend's catch-up batch on joining (their open doors, hands, items: "lbeg" .. "lend") and
 -- their checkpoint are dropped then; what they do live from now on still comes through.
 P.Fresh = { untilT = -1, SECS = 120, batch = {}, hooked = false,
-    FN = ":BndEvt__UI_MainMenu_NewGameButton_K2Node_ComponentBoundEvent_1_OnPressed__DelegateSignature" }
+    FN = ":BndEvt__UI_MainMenu_NewGameButton_K2Node_ComponentBoundEvent_1_OnPressed__DelegateSignature",
+    -- Load Game: the player asked to continue -> after the load they are brought to a friend who is further
+    -- (main.lua; only on this button - nothing automatic, speedrun rules)
+    FN_LOAD = ":BndEvt__UI_MainMenu_LoadGameButton_K2Node_ComponentBoundEvent_0_OnPressed__DelegateSignature" }
 P.fresh = function() return os.clock() < P.Fresh.untilT end
 P.old_progress = function(from) return P.Fresh.batch[from] and P.fresh() end   -- drop this catch-up event?
 P.NewGameReset = {}      -- functions run on New Game (other modules forget what they remembered)
@@ -55,7 +58,7 @@ P.sobj = function(sl)
     if o and P.valid(o) then return o end
     return nil
 end
-P.LATE_CLASSES = { LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
+P.LATE_CLASSES = { OpenVentDoor_C = true, LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
@@ -103,6 +106,10 @@ end
 local function actor_path(obj)
     local p = fullpath(obj)
     if p and p:find("ChildActor_GEN_VARIABLE_", 1, true) then
+        -- Not from inside a hooked game call: calling GetParentActor there (on a door leaf of an area being
+        -- changed) crashed the game itself (CH2 crash reports 1.6.3-1.6.8). Child actors seen in a hook keep
+        -- their plain name - Chapter 2 doors are synced by their pose, not by these events.
+        if (P.InHook or 0) > 0 then return p end
         local ok, cp = pcall(function()
             if P.quiet() or not obj:IsValid() then return nil end
             local parent, comp = obj:GetParentActor(), obj:GetParentComponent()
@@ -939,6 +946,8 @@ local REMAP = {
     -- power room: the solved power puzzle runs its whole chain (scanner power, lights, Huggy, doors, streaming)
     -- from this one event; sending its nested calls one by one didn't power anything for the others
     PowerConnector_Master_C = { ["On Powered_Event"] = "On Powered_Event" },
+    -- Make-A-Friend / vent puzzle: the vent doors the Huggy chase and the vent puzzle open
+    OpenVentDoor_C = { ["Open Door"] = "Open Door" },
 }
 local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
@@ -1187,6 +1196,17 @@ local function on_local_call(cname, fnname, ctx, ...)
         pcall(P.Brk.picked, obj)
         return
     end
+    -- Chapter 1: the player picked something up (Huggy's key, a tape, the Make-A-Friend toy...): the player's
+    -- "Pick Up Object" names the object's pickup component -> that object disappears for everyone (the item
+    -- itself reaches the others through the inventory / key sync)
+    if P.CHAPTER == 1 and fnname == "Pick Up Object" and cname:find("PlayerBP", 1, true) and args then
+        local apath = args:match("^o:(.+)%.[%w_]+$")
+        if apath and is_level_placed(apath) and SYNC_DESTROY then
+            share({ kind = "destroy", path = apath })
+            log("picked up %s: removed for everyone", apath:match("([^.]+)$") or apath)
+        end
+        return
+    end
 
     if DEATH_SET[fnname] and cname:find("PlayerBP", 1, true) then
         if not Game.dead then
@@ -1303,7 +1323,13 @@ local function hook_class(cls, trace_everything)
         HookedPath[hp] = true
         local flags = try(function() return fns[fname]:GetFunctionFlags() end) or 0
         if (flags & 0x00100000) ~= 0 or (flags & 0x00000400) ~= 0 then return end   -- delegate / native: not hookable safely
-        local ok, err = pcall(RegisterHook, cname .. ":" .. fname, function(ctx, ...) on_local_call(cname, fname, ctx, ...) end)
+        local ok, err = pcall(RegisterHook, cname .. ":" .. fname, function(ctx, ...)
+            -- inside a game call: actor_path must not call engine functions (see actor_path)
+            P.InHook = (P.InHook or 0) + 1
+            local ok, err = pcall(on_local_call, cname, fname, ctx, ...)
+            P.InHook = P.InHook - 1
+            if not ok then error(err, 0) end
+        end)
         if ok then
             local l = fname:lower()
             for _, w in ipairs(TRACE_WORDS) do if l:find(w, 1, true) then HookedFns[cname .. ":" .. fname] = true end end
@@ -2183,6 +2209,7 @@ if P.CHAPTER == 1 and LoopAsync and ExecuteInGameThread then
             P.Fresh.hooked = true
             local ok, err = pcall(RegisterHook, cls .. P.Fresh.FN, function() pcall(P.start_new_game) end)
             log("New Game button %s", ok and "hooked" or ("not hooked: " .. tostring(err)))
+            pcall(RegisterHook, cls .. P.Fresh.FN_LOAD, function() P.LoadPressedAt = os.clock() end)
         end)
         return false
     end)
@@ -2254,7 +2281,10 @@ P.Brk.brk_mine = function()
                 local l = a:K2_GetActorLocation()
                 local pt, d = P.Brk.brk_nearest(l)
                 if pt and d and d < P.Brk.NEAR then
-                    out[#out + 1] = { a = a, pt = pt }
+                    -- its colour (Yellow / Green / Red): the spawner also picks which colour lies where
+                    local col = "?"
+                    pcall(function() col = a["PickedupItem"]:ToString() end)
+                    out[#out + 1] = { a = a, pt = pt, col = col }
                     P.Brk.where[tostring(a:GetAddress())] = pt.name    -- (picked up: it's in the hand then, see picked)
                 end
             end
@@ -2278,7 +2308,7 @@ P.Brk.brk_apply = function()
     if not P.Brk.lay then
         -- we are the first: our spawner's choice is the team's
         local lay = {}
-        for _, b in ipairs(mine) do if b.pt then lay[#lay + 1] = b.pt.name end end
+        for _, b in ipairs(mine) do if b.pt then lay[#lay + 1] = b.pt.name .. "=" .. b.col end end
         if #lay == 0 then return end
         table.sort(lay)
         P.Brk.lay, P.Brk.lay_from = lay, Net.myid
@@ -2286,22 +2316,28 @@ P.Brk.brk_apply = function()
         if Coop.active() then P.Brk.brk_send_layout() end
         return
     end
-    local want, used = {}, {}
-    for _, n in ipairs(P.Brk.lay) do want[n] = true end
-    for _, b in ipairs(mine) do if b.pt and want[b.pt.name] then used[b.pt.name] = true end end
     local pts = {}
     for _, p in ipairs(P.Brk.brk_points()) do pts[p.name] = p end
-    for _, b in ipairs(mine) do
-        if not (b.pt and want[b.pt.name]) then
-            -- not on a team point: move it onto a free one
-            for _, n in ipairs(P.Brk.lay) do
-                if not used[n] and pts[n] then
-                    used[n] = true
-                    local p = pts[n]
-                    pcall(function() b.a:K2_SetActorLocation({ X = p.x, Y = p.y, Z = p.z }, false, {}, true) end)
-                    b.pt = p
-                    log("storage breaker moved to the team's spot %s", n)
-                    break
+    -- every team spot gets our breaker of the same colour
+    local done = {}
+    for _, e in ipairs(P.Brk.lay) do
+        local n, col = e:match("^([%w_]+)=([%w_%?]+)$")
+        local p = n and pts[n]
+        if p then
+            local pick
+            for _, b in ipairs(mine) do
+                if not done[b] and b.col == col then
+                    if b.pt and b.pt.name == n then pick = b; break end      -- already there
+                    pick = pick or b
+                end
+            end
+            if pick then
+                done[pick] = true
+                if not (pick.pt and pick.pt.name == n) then
+                    pcall(function() pick.a:K2_SetActorLocation({ X = p.x, Y = p.y, Z = p.z }, false, {}, true) end)
+                    pick.pt = p
+                    P.Brk.where[tostring(try(function() return pick.a:GetAddress() end))] = n
+                    log("storage breaker (%s) moved to the team's spot %s", col, n)
                 end
             end
         end
@@ -2333,7 +2369,7 @@ P.Brk.brk_name_ok = function(n) return type(n) == "string" and n:match("^[%w_]+$
 Coop.on("brklay", function(from, rest)
     if P.CHAPTER ~= 1 or P.old_progress(from) then return end
     local lay = {}
-    for n in tostring(rest or ""):gmatch("[^,]+") do if P.Brk.brk_name_ok(n) then lay[#lay + 1] = n end end
+    for n in tostring(rest or ""):gmatch("[^,]+") do if n:match("^[%w_]+=[%w_%?]+$") and #n <= 80 then lay[#lay + 1] = n end end
     if #lay == 0 or #lay > 16 then return end
     if P.Brk.lay and P.Brk.lay_from and P.Brk.lay_from >= 0 and P.Brk.lay_from <= from then return end   -- ours / an earlier one wins
     table.sort(lay)

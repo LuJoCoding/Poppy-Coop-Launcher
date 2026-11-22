@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.6.8"   -- 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.6.9"   -- 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -185,6 +185,9 @@ local function load_config()
     if Config.speedrun == true then
         local SPEEDRUN = { footsteps = false, boost = false, share_checkpoints = true }
         for k, v in pairs(SPEEDRUN) do if Config[k] == nil then Config[k] = v end end
+        -- a co-op run needs picked-up things gone for everyone (Huggy's key, the Make-A-Friend toy, breakers):
+        -- on in speedrun mode even when the switch was turned off by the earlier speedrun preset
+        Config.sync_destroy = true
     end
     local hs = normalize_server(Config.host_ip)
     if hs then Config.host_ip = hs
@@ -1125,6 +1128,8 @@ local function f2_tint(rgb)
 end
 
 local function f2_spawn(cls, x, y, z)
+    -- (the cached classes / meshes are dropped when areas change - Game.assets_changed: look them up again)
+    if not cls then pcall(f2_ready); return nil end
     local world = UEHelpers.GetWorld()
     if not valid(world) then return nil end
     local a = try(function() return world:SpawnActor(cls, { X = x, Y = y, Z = z }, { Pitch = 0, Yaw = 0, Roll = 0 }) end)
@@ -2932,6 +2937,34 @@ local function tick(dt)
         Game.respawn_tp_at = nil
         if next(Net.players) and not Tp then log("respawned: going to a friend (respawn_at_friend)"); TpReq = true end
     end
+    if Game.ahead_check_at and have and game_time > Game.ahead_check_at then
+        Game.ahead_check_at = nil
+        -- (after a fresh start the room connection comes up after the load: wait for the friends' checkpoints)
+        local known = false
+        for id in pairs(Net.players) do if tp_target(id) then known = true end end
+        if not known and game_time < (Game.ahead_until or 0) then Game.ahead_check_at = game_time + 2 end
+        local P2 = _G.PoppyCoop
+        local cpmax, mine = -1, -1
+        if P2 and P2.cp_info then cpmax, mine = P2.cp_info() end
+        local target, who = cpmax, nil
+        for id, pl in pairs(Net.players) do
+            local st = tp_target(id)
+            if st and st.cp and st.cp > target then target, who = st.cp, pl.name end
+        end
+        if known and target > mine then
+            -- Load Game = the team's furthest checkpoint: saved here and the level restarted at its spawn point
+            -- (the same as loading it - no teleport to a player)
+            log("Load Game: the team's furthest checkpoint is %d (ours %d) - loading it", target, mine)
+            pcall(function()
+                local gm = FindFirstOf("Chapter1_Gamemode_C")
+                gm["Save New Checkpoint"](gm, target)
+                local ks = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+                local pc = SafeUE.player_controller()
+                ks:ExecuteConsoleCommand(pc:GetWorld(), "RestartLevel", pc)
+            end)
+            if P2 and P2.popup then pcall(P2.popup, ("Loading checkpoint %d%s"):format(target, who and (" (" .. who .. ")") or "")) end
+        end
+    end
     if TpReq then local w = TpReq; TpReq = false; if have then pcall(teleport_to_friend, w) end end
     if Game.status_req then Game.status_req = false; pcall(Ping.status) end
     if Game.chat_req then Game.chat_req = false; pcall(Ping.chat_press) end
@@ -3117,6 +3150,14 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
         end)
     end
     if Game.dead and (Config.respawn_at_friend == true or Config.respawn_at_friend == "true") then Game.respawn_tp_at = game_time + 4 end
+    -- Chapter 1: "Load Game" pressed in the main menu (coop_world hooks the button) -> start at the team's
+    -- furthest checkpoint (a friend's arrives only once the room connection is up, after the load). Only on
+    -- that button, never after a death by itself (speedrun rules).
+    local P0 = _G.PoppyCoop
+    if CHAPTER == 1 and P0 and P0.LoadPressedAt and os.clock() - P0.LoadPressedAt < 90 then
+        P0.LoadPressedAt = nil
+        Game.ahead_check_at, Game.ahead_until = game_time + 4, game_time + 40
+    end
     Game.dead = false
     Ping.spectate_end()
     if Game.loading then log("level loaded: resuming") end
