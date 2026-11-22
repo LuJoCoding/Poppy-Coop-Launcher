@@ -721,6 +721,7 @@ table.insert(Handlers.join, function(id)       -- a late joiner needs our number
 end)
 table.insert(Handlers.leave, function(id) Motion.their[id] = nil end)
 Coop.on("mvfin", function(from, rest)
+    if P.old_progress and P.old_progress(from) then return end      -- (after New Game: see coop_world P.Fresh)
     local a, b, c, d, e, f, path = rest:match("^(%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (.+)$")
     if not path or not path:find(":PersistentLevel.", 1, true) then return end
     local v = { tonumber(a), tonumber(b), tonumber(c), tonumber(d), tonumber(e), tonumber(f) }
@@ -994,8 +995,9 @@ local POSE_CLASSES = {
     vent_door_BP_C = true, CloseDoorVentDoor_C = true, giftshopdoor_BP_C = true, TwoStateMoveable_C = true,
     boogiebot_cutout_BP_C = true, Bunzo_CutoutBP_C = true, candycat_cutout_BP_C = true, catbee_cutout_BP_C = true,
     Dino_Cart_CutoutBP_C = true, pj_cutout_BP_C = true, Sunflower_Cutout_ButtonBP_C = true,
-    BP_FurnaceDoor_C = true, BP_FurnaceDoor_Left_C = true,
     ChooChooTrainPull_C = true,          -- the train handle pulled with the GrabPack
+    -- not here: the furnace doors (BP_FurnaceDoor*) move themselves every tick (open / slam shut in the Mommy
+    -- chase); streaming their pose fought that animation - they flickered open/closed and Mommy got through.
     -- not here: gates/doors driven by power (LargeGate_Moveable, EventRaiseLowerDoors...) - their power
     -- signal is replayed, so they animate by themselves in every game; streaming them too would jitter
 }
@@ -1279,6 +1281,7 @@ local function pose_tick(dt)
 end
 
 Coop.on("pose", function(from, rest)
+    if P.old_progress and P.old_progress(from) then return end
     local key, a, b, c, x, y, z, fin = rest:match("^(%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (%S+) (%d)")
     if not key then return end
     local v = { tonumber(a), tonumber(b), tonumber(c), tonumber(x), tonumber(y), tonumber(z) }
@@ -1388,6 +1391,7 @@ local function anim_tick()
     end
 end
 Coop.on("apose", function(from, rest)
+    if P.old_progress and P.old_progress(from) then return end
     local key, fin, pos, asset = rest:match("^(%S+) (%d) (%S+) (%S+)$")
     pos = tonumber(pos)
     if not key or not pos or pos ~= pos or pos < 0 or pos > 1000 or not asset:find("^/Game/") then return end
@@ -1724,3 +1728,12 @@ end
 Coop.on("ping_popup", function(from, msg) popup(pname(from) .. ": " .. tostring(msg)) end)
 
 log("extras loaded (popups=%s physics=%s huggy=%s)", tostring(ENABLE_POPUPS), tostring(ENABLE_PHYSICS), tostring(ENABLE_HUGGY))
+
+-- New Game: forget where doors, hatches, gates and props were left (they were put back there after every
+-- load - in the new game too)
+if P.NewGameReset then
+    table.insert(P.NewGameReset, function()
+        Motion.final, Pose.final, Anim.final = {}, {}, {}
+        Pose.sent = {}
+    end)
+end

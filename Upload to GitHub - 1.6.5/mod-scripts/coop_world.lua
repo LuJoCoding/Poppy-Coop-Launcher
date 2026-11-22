@@ -35,6 +35,8 @@ P.Pad = { CLASS = "LeftHandAccessPad_C", LIVE = { ["Activate With Hand"] = true,
 P.Fresh = { untilT = -1, SECS = 120, batch = {}, hooked = false,
     FN = ":BndEvt__UI_MainMenu_NewGameButton_K2Node_ComponentBoundEvent_1_OnPressed__DelegateSignature" }
 P.fresh = function() return os.clock() < P.Fresh.untilT end
+P.old_progress = function(from) return P.Fresh.batch[from] and P.fresh() end   -- drop this catch-up event?
+P.NewGameReset = {}      -- functions run on New Game (other modules forget what they remembered)
 -- Quiet time: while the game tears levels down (dying -> reload, teleport, a streamed area being unloaded)
 -- the hooked Blueprint functions still fire on half-destroyed actors. Reading their params / calling functions
 -- on them from the hook (GetParentActor...) crashed the game inside UE4SS (crash reports 1.6.3: CH2 after a
@@ -313,6 +315,9 @@ local function ekey(kind, path, fn, args) return kind .. "|" .. path .. "|" .. (
 
 local function ledger_add(kind, path, fn, args, remote, allow_dupes)
     if path and path:find("VHSPlayerBP", 1, true) then return end    -- a played tape is a moment, not a state
+    -- furnace doors close again by themselves (Mommy chase): opening them again after a reload / death let
+    -- Mommy run through, so a friend's furnace door is only shared live, never re-applied
+    if path and path:find("FurnaceDoor", 1, true) then return end
     local key = ekey(kind, path, fn, args)
     if LedgerKeys[key] and not allow_dupes then return end
     LedgerKeys[key] = true
@@ -645,15 +650,25 @@ local function apply(e)
         if acls and P.LATE_CLASSES[acls] and P.late then
             -- Chapter 1 scanners / doors start timelines and sounds: run them at the late point (not inside an
             -- actor tick, where that crashed / deadlocked the game)
-            if acls == P.Pad.CLASS then
+            -- only a friend's scan counts for the echo time (not their power / door events on the scanner)
+            if acls == P.Pad.CLASS and (e.fn == "Activate With Hand" or e.fn == "Force Complete") then
                 P.Pad.remote_at = P.game_time()
-                if e.fn == "Force Complete" then P.Pad.done[e.path] = true end
+                P.Pad.done[e.path] = true          -- its completion here is the friend's: not sent back
             end
+            if acls == P.Pad.CLASS and e.fn == "Deactivate With Hand" then P.Pad.done[e.path] = nil end   -- (scan broken off)
             local path, fn, args = e.path, e.fn, e.args
             P.late(function()
                 local a2 = find_actor(path)
                 if a2 then
-                    if acls == P.Pad.CLASS then P.Pad.remote_at = P.game_time() end
+                    if acls == P.Pad.CLASS and (fn == "Activate With Hand" or fn == "Force Complete") then
+                        P.Pad.remote_at = P.game_time()
+                        -- the friend's scanner had power (their cable / breaker): ours may not yet - a scan or
+                        -- Force Complete on an unpowered scanner does nothing, so switch it on first
+                        if (fn == "Activate With Hand" or fn == "Force Complete") and try(function() return a2["IsPowered?"] end) == false then
+                            call_with(a2, "PowerUp", "")
+                            log("friend's hand scanner had power: powered %s here", path:match("([^.]+)$") or path)
+                        end
+                    end
                     local r = call_with(a2, fn, args)
                     log("friend's %s: %s on %s (%s)", acls == P.Pad.CLASS and "hand scanner" or "door", fn, path:match("([^.]+)$") or path, r)
                 end
@@ -1160,9 +1175,10 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     local rm = REMAP[short_class(cname)]
     if rm and rm[fnname] then
-        -- (a scan / door a friend started here finishes by itself: don't send its results back)
+        -- (a scan / door a friend started here finishes by itself: don't send its RESULTS back - the scan
+        -- itself, hand on / off, is always sent: a friend's power event must never block our own scan)
         local sc = short_class(cname)
-        if P.CHAPTER == 1 and (sc == P.Pad.CLASS or sc == P.RaiseDoor.CLASS)
+        if P.CHAPTER == 1 and sc == P.RaiseDoor.CLASS
             and (P.game_time() - P.Pad.remote_at < P.Pad.ECHO or P.RaiseDoor.remote[path]) then return end
         if sc == P.Pad.CLASS and fnname == "Activate Blueprints" then
             if P.Pad.done[path] then return end
@@ -1304,6 +1320,7 @@ local CensusCname = {}   -- class address -> full name ("" = not a blueprint cla
 -- e.a (an actor) may only be touched in the census frame: queued entries keep only the class (classes live
 -- as long as their level; the queue is dropped when levels change)
 local function hook_census_class(e)
+    if e.path then e = { cls = try(StaticFindObject, e.path) } end      -- queued: looked up fresh (see HookQ)
     local cls, a = e.cls, e.a
     if not valid(cls) then return end
     hook_class(cls)
@@ -1354,7 +1371,9 @@ table.insert(P.CensusDone, function(classes)
             -- pickup components need the actor: now; the class hooks (the slow part) a few per frame
             local cname = fullpath(e.cls) or ""
             if cname:find("^/Game/") and valid(e.a) then pcall(hook_pickup_components, e.a, e.cls, cname) end
-            HookQ[#HookQ + 1] = { cls = e.cls }
+            -- only the path is kept: the class of an area that streams out in the meantime is freed, and
+            -- touching it a frame later (even IsValid) crashed UE4SS (crash reports 1.6.3/1.6.4, Chapter 1)
+            if cname ~= "" then HookQ[#HookQ + 1] = { path = cname } end
         end
     end
     if os.clock() - c0 > 0.005 then log("slow: class hooks %.1f ms (%d new classes)", (os.clock() - c0) * 1000, #new) end
@@ -1989,7 +2008,8 @@ table.insert(P.Handlers.tick, function(dt, have)
         crumb("world: count levels")
         -- the world's own level list (a property read, ~0 ms; FindAllOf("Level") cost 12 ms every time)
         local lv = level_count()
-        if lv ~= last_level_objs and not P.quiet() then      -- (after the quiet time: see P.Quiet)
+        if lv ~= last_level_objs then HookQ = {}; SlotList = nil end   -- (queued classes may be freed now)
+        if lv ~= last_level_objs and not P.quiet() then      -- (the rescan after the quiet time: see P.Quiet)
             SlotList = nil
             HookQ = {}
             local c0 = os.clock()
@@ -2057,6 +2077,8 @@ P.new_game_check = function(cp)
         Inv1.team, Inv1.last, Inv1.addr = {}, nil, nil       -- (the code door's "Security" key came back)
         RH.room, RH.applied = 0, true                         -- (and Chapter 2's right hand type)
         P.ReplayHold, P.HeldReplays = nil, {}
+        P.Pad.done = {}
+        for _, f in ipairs(P.NewGameReset) do pcall(f) end    -- other modules' remembered state (coop_extra)
         P.NewGameAt = P.game_time()
         log("new game: forgot %d remembered world events (doors, items...)", n)
         return
@@ -2100,8 +2122,6 @@ if P.CHAPTER == 1 and LoopAsync and ExecuteInGameThread then
         return false
     end)
 end
--- (registered last: everything the join handlers above sent was the catch-up batch)
-table.insert(P.Handlers.join, function(id) Coop.send_to(id, "lend", "1") end)
 -- quiet while a level loads (see P.Quiet): from the world change until a moment after the player is back
 table.insert(P.Handlers.unload, function() P.Quiet.load = true end)
 table.insert(P.Handlers.restart, function()

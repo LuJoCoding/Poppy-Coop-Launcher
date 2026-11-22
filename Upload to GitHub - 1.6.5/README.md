@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.6.4.zip`**
+Download **`PoppyCoop_Launcher_1.6.5.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,12 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.6.5
+- **Fixed: Chapter 1 crash for both players after the power / hand scanner part.** The mod touched parts of an area the game had just unloaded.
+- **Fixed (Chapter 1): hand scanners still weren't synced when both players had power.** A power event from a friend made the game hold back its own scans for a few seconds. Now every scan goes through - the other players see the charge bar and the roll-up door opens for everyone.
+- **Fixed: "New Game" didn't reset everything.** Door leaves, hatches (e.g. the blue hand hatch), gates and moved props were put back where they were left in the old game. A new game now starts completely fresh, also when a friend is further.
+- **Fixed (Chapter 2): the furnace doors flickered open and shut and Mommy could get through.** They move by themselves now, as in the normal game, and aren't re-opened after you die.
 
 ### 1.6.4
 - **Fixed: crashes after dying, respawning or teleporting to a friend** (mostly Chapter 2). The mod touched game objects while the game was tearing the level down. It now stays quiet during these moments; what your friends did meanwhile is applied right after.
