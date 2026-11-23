@@ -59,6 +59,8 @@ P.sobj = function(sl)
     return nil
 end
 P.TeamHands = {}          -- L / R = true: someone in the team has that GrabPack hand (see check_hands)
+P.PickCheck = {}          -- level object path -> time: picked up, check then whether it is gone (on_local_call)
+P.InvEcho = {}            -- item name -> time a friend's "Add Stored Item" was applied here (see apply "pfn")
 -- Chapter 1: never shared (P.no_share):
 --  * a door CLOSING: the game shuts doors behind the player who went through (Huggy chase, Make-A-Friend);
 --    sent to the others it shut the door in front of whoever was still on the other side
@@ -67,12 +69,20 @@ P.TeamHands = {}          -- L / R = true: someone in the team has that GrabPack
 --  * Make-A-Friend part tracks: started by each game's own toy tube (the tube's "Open Container Door" is sent)
 P.CLOSE_FNS = { DoorClose = true, ["Close Door"] = true, Closeandlockbothslidingdoors = true, ["Close Left Door"] = true,
     ["Close Right Door"] = true, ["Close Left Sliding Door"] = true, ["Close Right Sliding Door"] = true }
-P.NO_SHARE_PATHS = { "StreamInLevel", "LevelVisibilityAdjuster", "UnloadEntrance", "LevelStreamingVolume",
-    "ToyPartsSpline", "DollPartsTrack", "RandomBoxes" }
+-- (StreamInLevel only LOADS - a friend's must reach us: the next area appears only through it, e.g. the vents after
+-- Make-A-Friend; LevelVisibilityAdjuster shows or hides: applied here only when it shows, see receive)
+P.NO_SHARE_PATHS = { "UnloadEntrance", "LevelStreamingVolume", "ToyPartsSpline", "DollPartsTrack", "RandomBoxes" }
+-- the Huggy chase start (Huggy himself, his vent lights, the walls that close the way back): each game starts it
+-- when its own player gets there - a friend's start put Huggy and an invisible wall in front of the other player
+P.HUGGY_PATHS = { "HuggyCharacter", "HuggyVent", "HuggyTrigger", "Hug_Reveal", "TubeCollision", "fence_stair_block",
+    "CloseDoorVentDoor" }
 P.no_share = function(path, fn)
     if P.CHAPTER ~= 1 or not path then return false end
     if P.CLOSE_FNS[fn] and (path:find("Door", 1, true) or path:find("Gate", 1, true)) then return true end
     for _, w in ipairs(P.NO_SHARE_PATHS) do if path:find(w, 1, true) then return true end end
+    if not (Config.sync_huggy == true or Config.sync_huggy == "true") then
+        for _, w in ipairs(P.HUGGY_PATHS) do if path:find(w, 1, true) then return true end end
+    end
     return false
 end
 P.LATE_CLASSES = { BP_ToyTube_C = true, OpenVentDoor_C = true, LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
@@ -754,6 +764,11 @@ local function apply(e)
     elseif e.kind == "pfn" then
         local p = pawn()
         if not p then return false end
+        -- the game moves a picked-up item right away (stored -> key list) by its own "Remove Stored Item": for an
+        -- item a friend gave us that must not go back to them (it took the item from them again - breakers
+        -- only half arrived), see the INV_SET hook
+        local nm = e.fn == "Add Stored Item In Inventory" and tostring(e.args or ""):match("DisplayName[^=]*=s%%3A([%w_]+)")
+        if nm then P.InvEcho[nm] = P.game_time() end
         local r = call_with(p, e.fn, e.args)
         trace("APPLY player %s(%s) -> %s", e.fn, e.args or "", r)
         if r == "ok" then log("inventory: %s %s", e.fn, (e.args or ""):gsub("%%20", " ")) end
@@ -822,6 +837,12 @@ local function receive(e, from)
     -- open). It isn't needed either: the blue hand itself is given to every player.
     if e.path and e.path:find("GrabPackDoor", 1, true) then return end
     if e.kind == "act" and P.no_share(e.path, e.fn) then return end      -- (older versions still send these)
+    if e.kind == "act" and P.CHAPTER == 1 and e.path and e.path:find("LevelVisibilityAdjuster", 1, true) then
+        local a = find_actor(e.path)
+        if a and try(function() return a["Should Make Visible"] end) ~= true then
+            trace("DROP hiding areas from a friend: %s", e.path); return
+        end
+    end
     trace("RECV from %s: %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
     if P.Fresh.batch[from] and P.fresh() then
         trace("DROP old progress from %s (new game): %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
@@ -973,7 +994,7 @@ local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
 -- a target is a function name, or { name, encoded args } when the force function takes parameters
 for _, m in pairs(REMAP) do for _, fn in pairs(m) do REMAP_TARGETS[type(fn) == "table" and fn[1] or fn] = true end end
-local DESTROY_OK = { "pickup", "3ditem", "item", "collect", "vhs", "key", "tape", "trophy", "battery", "hand", "web", "vent" }
+local DESTROY_OK = { "pickup", "3ditem", "item", "collect", "vhs", "key", "tape", "trophy", "battery", "hand", "web", "vent", "breaker" }
 -- player inventory mutators: replicated to every other player's own pawn
 local INV_FNS = { "Add Stored Item In Inventory", "Remove Item From Inventory", "Remove Stored Item From Inventory" }
 local DEATH_SET = { DeathCam = 1, DeathScreenUI = 1, DeathCamVents = 1, Limondeath = 1, DeathLimon = 1 }
@@ -1119,6 +1140,11 @@ local function flush_shares()
     FrameQ = {}
     local lsa
     for _, e in ipairs(q) do if e.lsa then lsa = e end end      -- the last one seen is the outermost
+    -- (the level script can run inside the checkpoint load, before its hook: checked again here)
+    if lsa and lsa.fn:find("^ExecuteUbergraph") and P.SpawnAt and P.game_time() - P.SpawnAt < 10 then
+        trace("level event %s during our checkpoint load: not shared", lsa.fn)
+        return
+    end
     if lsa then
         share_now(lsa)
         log("shared level event %s (%d nested calls not sent)", lsa.fn:sub(1, 60), #q - 1)
@@ -1190,6 +1216,7 @@ local function on_local_call(cname, fnname, ctx, ...)
                 local a, b = path:match("PlayerCheckpoint(%d+)%-(%d+)$")
                 a = tonumber(a or path:match("PlayerCheckpoint(%d+)"))
                 b = tonumber(b) or a
+                P.SpawnAt = P.game_time()       -- (level-script events of our own load are not shared: see LsaClass)
                 if a then
                     LOCAL_CP = (CP_MAX >= a and CP_MAX <= b) and CP_MAX or a
                     log("spawned at checkpoint %d", LOCAL_CP)
@@ -1232,8 +1259,9 @@ local function on_local_call(cname, fnname, ctx, ...)
     if P.CHAPTER == 1 and fnname == "Pick Up Object" and cname:find("PlayerBP", 1, true) and args then
         local apath = args:match("^o:(.+)%.[%w_]+$")
         if apath and is_level_placed(apath) and SYNC_DESTROY then
-            share({ kind = "destroy", path = apath })
-            log("picked up %s: removed for everyone", apath:match("([^.]+)$") or apath)
+            -- only when it really went away (the game also "picks up" things it keeps: the code pad was removed
+            -- for everyone in 1.7.0) - checked a moment later in P.PickCheck
+            P.PickCheck[apath] = P.game_time() + 1.0
         elseif apath and SYNC_DESTROY then
             -- spawned by the game (breakers, the Make-A-Friend doll...): names differ in every game -> the others
             -- remove the nearest one of the same class around where we are
@@ -1259,7 +1287,13 @@ local function on_local_call(cname, fnname, ctx, ...)
         return
     end
     if INV_SET[fnname] and cname:find("PlayerBP", 1, true) then
+        if fnname == "Add Stored Item In Inventory" then P.LastAddAt = P.game_time() end   -- (a real pickup: P.PickCheck)
         if not SYNC_INV then return end
+        local rn = fnname == "Remove Stored Item From Inventory" and tostring(args or ""):match("^s:([%w_]+)$")
+        if rn and P.InvEcho[rn] and P.game_time() - P.InvEcho[rn] < 3 then
+            trace("inventory: %s moved after a friend's add - not sent back", rn)
+            return
+        end
         if not args then log("inventory %s not shareable: %s", fnname, tostring(why)); return end
         share({ kind = "pfn", path = "pawn", fn = fnname, args = args })
         log("shared inventory change: %s", fnname)
@@ -1278,6 +1312,14 @@ local function on_local_call(cname, fnname, ctx, ...)
         return
     end
     if LsaClass[cname] and lsa_fn(fnname) then
+        -- what a level script runs while OUR game loads a checkpoint (respawn, Load Game) puts the player at that
+        -- checkpoint: sent to a friend it moved them there from wherever they were (Noah was put back to the
+        -- power room whenever the other player respawned). The game loads the checkpoint before the world change
+        -- is noticed (P.Quiet starts too late), so: nothing for 10 s after our own spawn.
+        if P.SpawnAt and P.game_time() - P.SpawnAt < 10 then
+            trace("level event %s during our checkpoint load: not shared", fnname)
+            return
+        end
         if SYNC_ACT and args and is_level_placed(path) then
             share({ kind = "act", path = path, fn = fnname, args = args, lsa = true })
         end
@@ -2479,3 +2521,28 @@ Coop.on("pickcls", function(from, rest)
     if P.late then P.late(go, "picked up (spawned)") else pcall(go) end
 end)
 table.insert(P.NewGameReset, function() P.TeamHands = {} end)
+
+-- picked up level objects: shared once they are really gone / hidden (see on_local_call "Pick Up Object")
+table.insert(P.Handlers.tick, function(dt, have)
+    if not next(P.PickCheck) or not have then return end
+    local now = P.game_time()
+    for path, at in pairs(P.PickCheck) do
+        if now >= at then
+            P.PickCheck[path] = nil
+            local a = try(StaticFindObject, path)
+            -- a real pickup: the object went away, or the game put an item into the inventory right then
+            -- (the code pad is "picked up" too, but nothing goes into the inventory and it stays)
+            local added = P.LastAddAt and P.LastAddAt >= at - 1.2 and P.LastAddAt <= at
+            local gone = added or not a or not try(function() return a:IsValid() end)
+                or try(function() return a.bHidden end) == true
+                or try(function() return a:GetActorEnableCollision() end) == false
+            if gone and Coop.active() then
+                share({ kind = "destroy", path = path })
+                log("picked up %s: removed for everyone", path:match("([^.]+)$") or path)
+            else
+                trace("picked up %s but it is still there: not shared", path)
+            end
+        end
+    end
+end)
+table.insert(P.Handlers.unload, function() P.PickCheck = {} end)

@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.7.0.zip`**
+Download **`PoppyCoop_Launcher_1.7.1.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,13 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.1
+- **Fixed (Chapter 1): your friend got teleported back to the power room** whenever you respawned or pressed Load Game. The game's checkpoint-loading script was sent to them and ran in their game.
+- **Fixed (Chapter 1): out of bounds on the conveyor after Make-A-Friend** (the vents were not loaded for the player who didn't scan the doll). Loading the next area is shared again; only unloading / hiding is not.
+- **Fixed (Chapter 1): invisible wall and Huggy staring at you** - the Huggy chase start (Huggy, his lights, the walls closing the way back) is no longer sent to the other player; each game starts it when its player gets there.
+- **Chapter 1 breakers:** the blue one on top now disappears for the other player too, and breakers a friend picks up stay in your inventory (the game's own moving of the item was sent back and took it away again).
+- **Fixed: interacting with the code pad removed it for the other player** (1.7.0). Picked-up things are only removed for others when they really went into the inventory.
 
 ### 1.7.0
 - **Chapter 1: doors no longer shut in front of you.** When the game closed a door behind one player (Huggy chase, Make-A-Friend), the door closed for everyone - the other player was locked out. Closing is now only local.

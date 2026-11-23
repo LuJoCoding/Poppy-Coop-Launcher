@@ -380,6 +380,10 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Teleports, vents, breakers",
+      L"Chapter 1: no more teleport back to the power room when the other respawns, the vents after Make-A-Friend load for both, no invisible wall, breakers synced (pickup + inventory).",
+      L"Teleports, Lüftung, Breaker",
+      L"Kapitel 1: kein Zurück-Teleport mehr in den Power Room, wenn der andere respawnt, die Lüftung nach Make-A-Friend lädt bei beiden, keine unsichtbare Wand, Breaker abgeglichen (Aufheben + Inventar)." },
     { false, L"Doors, falling, Make-A-Friend",
       L"Chapter 1: doors no longer shut in front of you, no more falling through the floor when a friend moves on, Make-A-Friend levers synced, hands for everyone, flashlight on F, local host joins by itself.",
       L"Türen, Durchfallen, Make-A-Friend",
