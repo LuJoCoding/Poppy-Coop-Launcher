@@ -353,6 +353,12 @@ local function mark(key) recent[key] = P.game_time() end
 
 ------------------------------------------------------------------ ledger
 local Ledger = {}            -- ordered list of { kind, path, fn, args, remote }
+-- Chapter 1's power puzzles (after the red hand / breakers, PowerConnector_Master "On Powered_Event"): solving one
+-- runs the game's sequence that puts the player at a fixed spot of the puzzle and starts the ride on. Re-applied
+-- whenever the area loaded again in a friend's game (or while it was away: pending), it pulled that friend back
+-- there from wherever they were - twice in a row for Noah (1.7.2, "teleported back after the chase"). So these are
+-- applied only live, while the puzzle is loaded at the friend's; never remembered or re-applied later.
+P.LIVE_ONLY_FNS = { ["On Powered_Event"] = true }
 local LedgerKeys = {}
 local Pending = {}           -- key -> event whose actor isn't loaded locally yet
 
@@ -363,6 +369,7 @@ local function ledger_add(kind, path, fn, args, remote, allow_dupes)
     -- furnace doors close again by themselves (Mommy chase): opening them again after a reload / death let
     -- Mommy run through, so a friend's furnace door is only shared live, never re-applied
     if path and path:find("FurnaceDoor", 1, true) then return end
+    if P.LIVE_ONLY_FNS[fn or ""] then return end
     local key = ekey(kind, path, fn, args)
     if LedgerKeys[key] and not allow_dupes then return end
     LedgerKeys[key] = true
@@ -725,6 +732,12 @@ local function apply(e)
                             log("friend's hand scanner had power: powered %s here", path:match("([^.]+)$") or path)
                         end
                     end
+                    -- Make-A-Friend toy tube: the friend pulled its lever. "Open Container Door" only lets the parts out;
+                    -- the lever and the door flap stayed up here ("levers not synced"). Force Open pulls the lever
+                    -- down and swings the flap open, as the game does after a real pull.
+                    if acls == "BP_ToyTube_C" and fn == "Open Container Door" and try(function() return a2["isPulled?"] end) ~= true then
+                        call_with(a2, "Force Open", "")
+                    end
                     local r = call_with(a2, fn, args)
                     log("friend's %s: %s on %s (%s)", acls == P.Pad.CLASS and "hand scanner" or "door", fn, path:match("([^.]+)$") or path, r)
                 end
@@ -861,6 +874,9 @@ local function receive(e, from)
     end
     if e.kind == "act" then
         if lsa_fn(e.fn) then log("level event %s from player %s", tostring(e.fn):sub(1, 60), tostring(from)) end
+    end
+    if P.LIVE_ONLY_FNS[e.fn or ""] and (P.quiet() or not find_actor(e.path)) then
+        trace("DROP live-only %s: not loaded here right now", key); return
     end
     if P.quiet() or not apply(e) then
         Pending[key .. ((e.kind == "pfn" or e.kind == "cfn") and ("#" .. #Ledger) or "")] = e
@@ -1907,6 +1923,12 @@ local SyncProf = {}
 -- friend's area on demand (level_prep) and waits for the floor.
 local BG_LEVELS = Config.bg_levels == true or Config.bg_levels == "true"
 local NO_BACKGROUND = { StatuesRoom = true, Mommy_Chase_Redone = true }
+-- Chapter 1: the Steam Hallway (and the Storage behind it) is loaded by the power room's own script when the power
+-- comes on - in the game of whoever did it. The other player's game only got the power events replayed, so the
+-- hallway never loaded there: a black corridor behind the door. These quiet areas (no enemies) are kept loaded
+-- whenever a friend has them; walking in makes them ours (see "keeping ... you're standing in it").
+P.BG_ALWAYS = { [1] = { ["04_SteamHallway"] = true, ["05_Storage"] = true }, any = {} }
+for pk in tostring(Config.bg_always_levels or ""):gmatch("[%w_%-]+") do P.BG_ALWAYS.any[pk] = true end
 for pk in tostring(Config.no_background_levels or ""):gmatch("[%w_%-]+") do NO_BACKGROUND[pk] = true end
 local function sync_levels()
     local c0 = os.clock()
@@ -1920,7 +1942,12 @@ local function sync_levels()
             local n = resolve_slot(slot, pkg)
             -- deadly chase levels run their game against OUR player when loaded here (Statues' PJ killed a
             -- player in the hub): not kept loaded in the background; F6 (level_prep) still loads them
-            if n and BG_LEVELS and not NO_BACKGROUND[pkg] then need[n] = pkg end
+            local always = (P.BG_ALWAYS[P.CHAPTER or 0] or {})[pkg] or P.BG_ALWAYS.any[pkg]
+            -- Chapter 1: "keep friends' areas loaded" (bg_levels) is ignored. A friend's Vent Chase loaded in the
+            -- background ran its script against OUR player: the whole level restarted at checkpoint 11, twice, for
+            -- a player who wasn't even in the chase ("teleported back", 1.7.2). Only the quiet areas above.
+            local bg = BG_LEVELS and P.CHAPTER ~= 1 and not NO_BACKGROUND[pkg]
+            if n and (bg or always) then need[n] = pkg end
         end
     end
     local standing = nil

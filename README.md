@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.7.2.zip`](Upload%20to%20GitHub%20-%201.7.2/PoppyCoop_Launcher_1.7.2.zip)**
-(folder `Upload to GitHub - 1.7.2`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.7.3.zip`](Upload%20to%20GitHub%20-%201.7.3/PoppyCoop_Launcher_1.7.3.zip)**
+(folder `Upload to GitHub - 1.7.3`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,12 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.3
+- **Fixed (Chapter 1): your friend got pulled back to the power puzzle** (the one after the red hand and the breakers). Solving it starts the game's ride, and the mod re-ran it in the friend's game every time that area loaded again - wherever they were. Power puzzles are now only shared while the other player has the puzzle loaded, never re-run later.
+- **Chapter 1 Make-A-Friend levers:** when a friend pulls a toy tube lever, the lever goes down and the flap opens in your game too (before, only the parts came out).
+- **Fixed (Chapter 1): black corridor behind the power room door** (Steam Hallway) when the friend switched the power on. The hallway and the storage room now load for you whenever a friend has them.
+- **Chapter 1: "Keep friends' areas loaded" is ignored** - a friend's chase areas loaded in the background ran their scripts in your game.
 
 ### 1.7.2
 - **Launcher: "What's new" lists every update.** Pick a version on the left to see all its changes on the right (scroll with the mouse wheel), like the Logs page.
