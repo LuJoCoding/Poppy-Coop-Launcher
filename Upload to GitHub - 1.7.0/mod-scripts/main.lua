@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.6.9"   -- 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.7.0"   -- 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -258,7 +258,36 @@ local function wire_room()
     return CHAPTER == 1 and r or ("c" .. CHAPTER .. "-" .. r)
 end
 
+-- "Host on this PC" with several games on this PC: only the first one hosts. It writes a heartbeat file to
+-- %TEMP% every 2 s; another game that is set to host sees it and joins 127.0.0.1 instead (before, the second
+-- game had to be switched to a local server by hand, and two games started quickly both tried to host).
+-- (in the mod folder - shared by every game started from this game folder, whatever Wine prefix - and in %TEMP%)
+Net.host_files = { MOD_DIR .. "\\host_running.txt", ((os.getenv and os.getenv("TEMP")) or MOD_DIR) .. "\\PoppyCoop_host.txt" }
+Net.sid = tostring(os.time()) .. "_" .. tostring(math.floor((os.clock() * 1000000) % 1000000)) .. "_" .. tostring(SLOT)
+Net.other_host = function()
+    for _, fn in ipairs(Net.host_files) do
+        local f = io.open(fn, "r")
+        if f then
+            local t, id, port = (f:read("*a") or ""):match("^(%d+) (%S+) (%d+)")
+            f:close()
+            if t and id ~= Net.sid and tonumber(port) == tonumber(Config.port) and os.time() - tonumber(t) <= 6 then return true end
+        end
+    end
+    return false
+end
+Net.host_beat = function()
+    if Config.mode ~= "host" then return end
+    for _, fn in ipairs(Net.host_files) do
+        local f = io.open(fn, "w")
+        if f then f:write(("%d %s %d"):format(os.time(), Net.sid, tonumber(Config.port) or 27777)); f:close() end
+    end
+end
 local function launch_helper()
+    if Config.mode == "host" and (SLOT > 0 or Net.other_host()) then
+        Config.mode, Config.host_ip = "join", "127.0.0.1"
+        log("another game on this PC is already hosting: joining it (127.0.0.1:%d)", Config.port)
+    end
+    Net.host_beat()
     local exe = MOD_DIR .. "\\PoppyCoopNet.exe"
     local f = io.open(exe, "rb")
     if not f then log("helper missing: %s", exe); return end
@@ -279,6 +308,7 @@ local clock = os.clock  -- replaced by game time once ticking
 local game_time = 0
 
 local function net_try_connect()
+    if Config.mode == "host" and os.time() ~= Net.beat_t then Net.beat_t = os.time(); if os.time() % 2 == 0 then Net.host_beat() end end
     if Net.connected or Config.mode == "off" then return end
     if game_time - Net.last_try < 1.0 then return end
     Net.last_try = game_time
@@ -1808,7 +1838,7 @@ local function g1_update(p, st, c, crouch)
         g1_show(g.bpk, has.L or has.R)
     end
     local ang = math.rad((p.aim or 0) + (p.air or 0) * 12)        -- arms follow the look pitch
-    local dz = crouch and -30 or 0
+    local dz = crouch and 3 or 0        -- (matches the mannequin: upper body -30, whole figure +33 when crouched)
     local function aimed(x, z)                                    -- rotate around the shoulder (z = 32)
         local dx, dzz = x, z - 32
         return dx * math.cos(ang) - dzz * math.sin(ang), 32 + dx * math.sin(ang) + dzz * math.cos(ang)
@@ -1954,9 +1984,12 @@ local function m1_update(p, st, c, crouch, dead, swing, bob, amount)
     if key == p.m1key then return false end
     p.m1key = key
     local cy, sy = math.cos(math.rad(c.yaw)), math.sin(math.rad(c.yaw))
+    -- crouched, the game's capsule centre sits ~33 cm lower (55 instead of 88 above the feet): the figure is
+    -- built for standing, so it is lifted by that much (its legs were in the floor)
+    local base = (crouch and not dead) and 33 or 0
     local function T(x, z)                                       -- dead: lying on the back
         if dead then return -(z + 88), -80 + x * 0.3 end
-        return x, z
+        return x, z + base
     end
     local function A(name) return part(p, p.m1[name]) end
     local function put(name, x, y, z, sx, sy2, sz, pitch)
@@ -1996,8 +2029,9 @@ local function m1_update(p, st, c, crouch, dead, swing, bob, amount)
         local reach = 2 * M1_LEG - (crouch and 0 or 0) - p.air * 18
         local tx, tz = reach * math.sin(th), hipz - reach * math.cos(th)
         local lift = math.max(0, math.cos(p.phase or 0) * sg) * 7 * amount
-        if crouch then tx, tz = 6, -84 end
-        tz = math.max(-84, tz) + lift * (crouch and 0 or 1)
+        -- crouch-walking: short steps (the feet stayed put before - no walking animation when sneaking)
+        if crouch then tx, tz = 6 + 26 * math.sin(math.rad(swing * sg)), -84 end
+        tz = math.max(-84, tz) + lift * (crouch and 0.6 or 1)
         local kx, kz, ax, az = m1_ik(0, hipz, tx, tz, M1_LEG, M1_LEG, 1)
         seg("thigh" .. side, 0, hipz, kx, kz, y)
         seg("shin" .. side, kx, kz, ax, az, y)
@@ -2802,7 +2836,7 @@ end)
 
 -- Keys come from ue4ss\Mods\PoppyCoop\keybinds.txt (written with the defaults on first run).
 -- Names are UE4SS key names: F1..F12, A..Z, ONE..NINE, NUM_ZERO..NUM_NINE, INS, HOME, END, PAGE_UP ...
-local KB = { teleport = "F6", buddy = "F7", record = "O", play = "P", ping = "T", status = "F11", chat = "Y" }   -- F10 is the UE4SS console key
+local KB = { teleport = "F6", buddy = "F7", record = "O", play = "P", ping = "T", status = "F11", chat = "Y", flashlight = "F" }   -- F10 is the UE4SS console key
 do
     local fn = MOD_DIR .. "\\keybinds.txt"
     local f = io.open(fn, "r")
@@ -2819,7 +2853,7 @@ do
         f = io.open(fn, "w")
         if f then
             f:write("# PoppyCoop keys - change a key, save, restart the game. F8/F9 are left free for other mods.\n")
-            for _, k in ipairs({ "teleport", "buddy", "record", "play", "ping", "status", "chat" }) do f:write(k, "=", KB[k], "\n") end
+            for _, k in ipairs({ "teleport", "buddy", "record", "play", "ping", "status", "chat", "flashlight" }) do f:write(k, "=", KB[k], "\n") end
             f:close()
         end
     end
@@ -2839,6 +2873,9 @@ bind("chat", function() Game.chat_req = true end)
 bind("buddy", function() Ghost.keys[#Ghost.keys + 1] = "buddy" end)
 bind("record", function() Ghost.keys[#Ghost.keys + 1] = "record" end)
 bind("play", function() Ghost.keys[#Ghost.keys + 1] = "play" end)
+-- Chapter 1: the flashlight on a key (the game only switches it on by triggers - after F6 into the Huggy
+-- chase or a vent it stayed off)
+bind("flashlight", function() Game.flash_req = true end)
 log("keys: teleport=%s buddy=%s record=%s play=%s ping=%s status=%s chat=%s", KB.teleport, KB.buddy, KB.record, KB.play, KB.ping, KB.status, KB.chat)
 
 ----------------------------------------------------------------------- tick
@@ -2967,6 +3004,12 @@ local function tick(dt)
     end
     if TpReq then local w = TpReq; TpReq = false; if have then pcall(teleport_to_friend, w) end end
     if Game.status_req then Game.status_req = false; pcall(Ping.status) end
+    if Game.flash_req then
+        Game.flash_req = false
+        if have and CHAPTER == 1 then
+            late(function() local pw = Game.pawn; if valid(pw) then pcall(function() pw["Toggle Flashlight"](pw, pw["Flashlight On?"] ~= true) end) end end, "flashlight")
+        end
+    end
     if Game.chat_req then Game.chat_req = false; pcall(Ping.chat_press) end
     if Ping.chat_pick and game_time > Ping.chat_at then pcall(Ping.chat_send) end
     if Ping.req then Ping.req = false; if have then local ok, err = pcall(Ping.do_ping); if not ok then log("ping: %s", tostring(err)) end end end
@@ -3096,6 +3139,9 @@ function world_unloading()
     for k in pairs(G1K) do G1K[k] = nil end
     for k in pairs(AssetRequested) do AssetRequested[k] = nil end   -- ...so they may need loading again
     Tint.base, Tint.mids, Tint.tries, Tint.next_try = nil, {}, 0, 0
+    -- jobs queued for the late point of the old world hold its objects: never run them in the new one
+    -- (crash after a respawn, 1.6.9 report: reading a freed object right after "spawned puppet")
+    Late.jobs = {}
     for _, h in ipairs(Handlers.unload) do pcall(h) end
     log("level loading: cleared cached objects")
 end

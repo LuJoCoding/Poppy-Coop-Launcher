@@ -380,6 +380,10 @@ static std::wstring tr(const std::wstring& en) {
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
 static const NewsItem NEWS[] = {
+    { false, L"Doors, falling, Make-A-Friend",
+      L"Chapter 1: doors no longer shut in front of you, no more falling through the floor when a friend moves on, Make-A-Friend levers synced, hands for everyone, flashlight on F, local host joins by itself.",
+      L"Türen, Durchfallen, Make-A-Friend",
+      L"Kapitel 1: Türen gehen nicht mehr vor dir zu, kein Durch-den-Boden-Fallen mehr, wenn ein Freund weitergeht, Make-A-Friend-Hebel abgeglichen, Hände für alle, Taschenlampe auf F, zweites Spiel auf einem PC tritt selbst bei." },
     { false, L"Load Game, key, toy, breakers",
       L"Chapter 1: Load Game starts at the team's furthest checkpoint. Huggy's key and the Make-A-Friend toy are gone for everyone once taken (also in Speedrun mode), breaker colours match, the vent door opens for all. Chapter 2: a crash fixed.",
       L"Spiel laden, Schlüssel, Spielzeug, Breaker",

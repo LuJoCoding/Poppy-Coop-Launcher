@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.6.9.zip`](Upload%20to%20GitHub%20-%201.6.9/PoppyCoop_Launcher_1.6.9.zip)**
-(folder `Upload to GitHub - 1.6.9`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.7.0.zip`](Upload%20to%20GitHub%20-%201.7.0/PoppyCoop_Launcher_1.7.0.zip)**
+(folder `Upload to GitHub - 1.7.0`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,17 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.0
+- **Chapter 1: doors no longer shut in front of you.** When the game closed a door behind one player (Huggy chase, Make-A-Friend), the door closed for everyone - the other player was locked out. Closing is now only local.
+- **Chapter 1: no more falling through the floor / invisible walls / out of bounds** after a friend moved on. A friend's "unload this area" was applied to your game while you were still in it. Each game now loads and unloads only for its own player.
+- **Chapter 1 Make-A-Friend:** the levers (toy tubes) are synced; the toy machine no longer starts by itself or drops extra grey boxes in the other game.
+- **Picked-up things that the game spawns** (breakers, the Make-A-Friend doll) now disappear for everyone too.
+- **GrabPack hands:** if anyone in the team has a hand, you get it too - also after joining later or Load Game into a friend's checkpoint.
+- **Flashlight on F** (Chapter 1) - e.g. after F6 into the Huggy chase. Changeable in the launcher's key settings.
+- **"Host on this PC" with several games on one PC:** the second game joins the first by itself (no more switching servers).
+- **Crouching friends** no longer sink into the floor (Chapter 1).
+- **Fixed: a crash right after respawning.**
 
 ### 1.6.9
 - **Chapter 1: "Load Game" starts at the team's furthest checkpoint.** If a friend is further (e.g. at Make-A-Friend), pressing Load Game in the main menu loads that checkpoint for you, at its normal spawn point. Only on that button - nothing happens by itself after a death.

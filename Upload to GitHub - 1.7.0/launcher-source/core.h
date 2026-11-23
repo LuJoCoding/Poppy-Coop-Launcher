@@ -180,6 +180,7 @@ static std::vector<KeyBind> default_keys() {
         { L"ping", L"Ping a spot for everyone", L"T", L"" },
         { L"status", L"Show fps / ping / players", L"F11", L"" },   // F10 opens the UE4SS console
         { L"chat", L"Chat menu", L"Y", L"" },
+        { L"flashlight", L"Flashlight (Chapter 1)", L"F", L"" },
     };
 }
 // chapters: bit 1 = Chapter 1, bit 2 = Chapter 2

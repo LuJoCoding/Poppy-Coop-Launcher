@@ -58,7 +58,24 @@ P.sobj = function(sl)
     if o and P.valid(o) then return o end
     return nil
 end
-P.LATE_CLASSES = { OpenVentDoor_C = true, LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
+P.TeamHands = {}          -- L / R = true: someone in the team has that GrabPack hand (see check_hands)
+-- Chapter 1: never shared (P.no_share):
+--  * a door CLOSING: the game shuts doors behind the player who went through (Huggy chase, Make-A-Friend);
+--    sent to the others it shut the door in front of whoever was still on the other side
+--  * the level streaming triggers: each game streams for its own player; a friend's "unload this area" took
+--    the floor away under the player still in it (falling through, invisible walls, out of bounds)
+--  * Make-A-Friend part tracks: started by each game's own toy tube (the tube's "Open Container Door" is sent)
+P.CLOSE_FNS = { DoorClose = true, ["Close Door"] = true, Closeandlockbothslidingdoors = true, ["Close Left Door"] = true,
+    ["Close Right Door"] = true, ["Close Left Sliding Door"] = true, ["Close Right Sliding Door"] = true }
+P.NO_SHARE_PATHS = { "StreamInLevel", "LevelVisibilityAdjuster", "UnloadEntrance", "LevelStreamingVolume",
+    "ToyPartsSpline", "DollPartsTrack", "RandomBoxes" }
+P.no_share = function(path, fn)
+    if P.CHAPTER ~= 1 or not path then return false end
+    if P.CLOSE_FNS[fn] and (path:find("Door", 1, true) or path:find("Gate", 1, true)) then return true end
+    for _, w in ipairs(P.NO_SHARE_PATHS) do if path:find(w, 1, true) then return true end end
+    return false
+end
+P.LATE_CLASSES = { BP_ToyTube_C = true, OpenVentDoor_C = true, LeftHandAccessPad_C = true, SecurityPadInteractionBP_C = true, PowerConnector_Master_C = true, EventRaiseLowerDoors_C = true, ExtendoTwoHandActivation_C = true }
 local SYNC_DESTROY = Config.sync_destroy ~= false
 local SYNC_LEVELS = Config.sync_levels ~= false
 local SYNC_HANDS = Config.sync_hands ~= false
@@ -804,6 +821,7 @@ local function receive(e, from)
     -- while the level is torn down, and that reached a friend who had just started a New Game (the box stood
     -- open). It isn't needed either: the blue hand itself is given to every player.
     if e.path and e.path:find("GrabPackDoor", 1, true) then return end
+    if e.kind == "act" and P.no_share(e.path, e.fn) then return end      -- (older versions still send these)
     trace("RECV from %s: %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
     if P.Fresh.batch[from] and P.fresh() then
         trace("DROP old progress from %s (new game): %s %s %s", tostring(from), tostring(e.kind), tostring(e.path), tostring(e.fn))
@@ -948,6 +966,8 @@ local REMAP = {
     PowerConnector_Master_C = { ["On Powered_Event"] = "On Powered_Event" },
     -- Make-A-Friend / vent puzzle: the vent doors the Huggy chase and the vent puzzle open
     OpenVentDoor_C = { ["Open Door"] = "Open Door" },
+    -- Make-A-Friend: a lever opens its toy tube, which then sends the parts down the track
+    BP_ToyTube_C = { ["Open Container Door"] = "Open Container Door" },
 }
 local function short_class(cname) return cname and cname:match("([^%.]+)$") end
 local REMAP_TARGETS = {}
@@ -1109,6 +1129,15 @@ end
 
 local Hot, HotCount, HotSec = {}, {}, -1
 local DISCOVER = Config.discover == true or Config.discover == "true"
+-- recording a puzzle (config discover_classes=Name1,Name2 + trace_on.txt): every function of the classes whose
+-- name contains one of these is hooked and traced, to see what the game really calls (not shared by this)
+P.DiscoverCls = {}
+do
+    local list = tostring(Config.discover_classes or "")
+    local f = io.open(P.MOD_DIR .. "\\discover.txt", "r")      -- (the launcher rewrites config.txt: a file of its own)
+    if f then list = list .. "," .. (f:read("*a") or ""); f:close() end
+    for w in list:gmatch("[^,%s]+") do P.DiscoverCls[#P.DiscoverCls + 1] = w:lower() end
+end
 local function on_local_call(cname, fnname, ctx, ...)
     local hk = cname .. ":" .. fnname
     if P.crumb then P.crumb("hook " .. hk:match("([^/]+)$")) end
@@ -1192,6 +1221,7 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     if replaying > 0 or not Coop.active() or not path then return end
     if is_checkpoint_event(path, fnname) then return end      -- see is_checkpoint_event
+    if P.no_share(path, fnname) then return end              -- see P.no_share
     if fnname == "Pick Up Object" and cname:find("/Breakers%.") and P.Brk then     -- Storage breakers (see P.Brk)
         pcall(P.Brk.picked, obj)
         return
@@ -1204,6 +1234,17 @@ local function on_local_call(cname, fnname, ctx, ...)
         if apath and is_level_placed(apath) and SYNC_DESTROY then
             share({ kind = "destroy", path = apath })
             log("picked up %s: removed for everyone", apath:match("([^.]+)$") or apath)
+        elseif apath and SYNC_DESTROY then
+            -- spawned by the game (breakers, the Make-A-Friend doll...): names differ in every game -> the others
+            -- remove the nearest one of the same class around where we are
+            local o = try(StaticFindObject, apath)
+            local cls = o and try(function() return o:GetClass():GetFName():ToString() end)
+            if cls and cls:find("^Breakers") and P.Brk then pcall(P.Brk.picked, o); return end   -- (P.Brk: by spawn point)
+            local me = try(function() return obj:K2_GetActorLocation() end)
+            if cls and me and cls:match("^[%w_]+$") then
+                Coop.send_event("pickcls", ("%s %d %d %d"):format(cls, math.floor(me.X), math.floor(me.Y), math.floor(me.Z)))
+                log("picked up a spawned %s: removed for everyone", cls)
+            end
         end
         return
     end
@@ -1352,6 +1393,10 @@ local function hook_class(cls, trace_everything)
         if not query and not SKIP_FN[fname] and not fname:find("__", 1, true) and not fname:find("^ExecuteUbergraph") and not fname:find("^InpActEvt") then
             local l = fname:lower()
             local hit = DISCOVER and trace_everything
+            if not hit and #P.DiscoverCls > 0 then
+                local lc = cname:lower()
+                for _, w in ipairs(P.DiscoverCls) do if lc:find(w, 1, true) then hit = true; break end end
+            end
             if DISCOVER then for _, w in ipairs(TRACE_WORDS) do if l:find(w, 1, true) then hit = true end end end
             if hit then try_hook(fname) end
         end
@@ -1512,6 +1557,7 @@ end
 local hands_last = { R = nil, L = nil }
 Coop.on("hand", function(from, which)
     if P.Fresh.batch[from] and P.fresh() then return end      -- (old progress after New Game, see P.Fresh)
+    if which == "L" or which == "R" then P.TeamHands[which] = true end
     local p = pawn()
     if not SYNC_HANDS or not p then return end
     local prop = which == "R" and "hasRightHand?" or "hasLeftHand?"
@@ -1529,6 +1575,17 @@ local function check_hands()
         local has = try(function() return p[w == "R" and "hasRightHand?" or "hasLeftHand?"] end) and true or false
         if hands_last[w] == false and has and Coop.active() then Coop.send_event("hand", w); log("we got %s hand, sharing", w) end
         hands_last[w] = has
+        if has then P.TeamHands[w] = true
+        elseif P.CHAPTER == 1 and SYNC_HANDS and P.TeamHands[w] and not P.quiet() and P.game_time() > (P.TeamHands.next or 0) then
+            -- the team has this hand but we don't (joined later, Load Game into a friend's checkpoint, a reload):
+            -- give it back (before, only the join message gave it, and only once)
+            P.TeamHands.next = P.game_time() + 10
+            local fn = w == "R" and "Activate Right Hand" or "Activate Left Hand"
+            replaying = replaying + 1
+            local ok = pcall(function() p[fn](p) end)
+            replaying = replaying - 1
+            log("the team has the %s hand: given to us (%s)", w, ok and "ok" or "failed")
+        end
     end
 end
 
@@ -2393,3 +2450,32 @@ table.insert(P.Handlers.tick, function(dt, have)
     -- (moving / removing actors: from the late queue, outside the actor tick)
     if P.late then P.late(function() pcall(P.Brk.brk_apply) end, "storage breakers") else pcall(P.Brk.brk_apply) end
 end)
+
+-- a friend picked up a spawned object (see on_local_call "Pick Up Object"): remove our nearest one of that class
+P.PICK_RADIUS = 700
+Coop.on("pickcls", function(from, rest)
+    if P.CHAPTER ~= 1 or not SYNC_DESTROY or P.old_progress(from) then return end
+    local cls, x, y, z = tostring(rest or ""):match("^([%w_]+) (%-?%d+) (%-?%d+) (%-?%d+)$")
+    if not cls then return end
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    local function go()
+        local best, bd
+        for _, a in ipairs(try(FindAllOf, cls) or {}) do
+            pcall(function()
+                if a:IsValid() and not is_level_placed(fullpath(a) or "") then
+                    local l = a:K2_GetActorLocation()
+                    local d = (l.X - x) ^ 2 + (l.Y - y) ^ 2 + (l.Z - z) ^ 2
+                    if d < P.PICK_RADIUS ^ 2 and (not bd or d < bd) then best, bd = a, d end
+                end
+            end)
+        end
+        if best then
+            replaying = replaying + 1
+            pcall(function() best:K2_DestroyActor() end)
+            replaying = replaying - 1
+            log("a friend picked up a %s: removed here", cls)
+        end
+    end
+    if P.late then P.late(go, "picked up (spawned)") else pcall(go) end
+end)
+table.insert(P.NewGameReset, function() P.TeamHands = {} end)

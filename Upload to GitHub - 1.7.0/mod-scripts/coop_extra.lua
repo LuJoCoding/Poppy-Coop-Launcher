@@ -1749,3 +1749,6 @@ if P.LevelsChanged then
         P.Census.want = true
     end)
 end
+
+-- a whole new world (respawn, Load Game): parts cached or queued before belong to the old one
+table.insert(Handlers.unload, function() P.LevelGen = (P.LevelGen or 0) + 1 end)
