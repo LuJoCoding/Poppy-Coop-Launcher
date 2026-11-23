@@ -162,6 +162,19 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L" errors", L" Fehler" },
         { L" logs", L" Logs" },
         { L"Refresh", L"Aktualisieren" },
+        { L" invites you - open Friends to join.", L" lädt dich ein - öffne Freunde zum Beitreten." },
+        { L"Invite sent - they see it in their launcher.", L"Einladung gesendet - dein Freund sieht sie im Launcher." },
+        { L"Invites need the new friends server - coming soon.", L"Einladungen brauchen den neuen Freunde-Server - kommt bald." },
+        { L"You can only invite friends.", L"Du kannst nur Freunde einladen." },
+        { L" invites you", L" lädt dich ein" },
+        { L"Join now", L"Jetzt beitreten" },
+        { L"Dismiss", L"Ablehnen" },
+        { L"Invite", L"Einladen" },
+        { L"Pick Create Game first - then invite.", L"Wähle zuerst Spiel erstellen - dann einladen." },
+        { L"Joining ", L"Trete bei: " },
+        { L" - close the game, then press PLAY.", L" - schließe das Spiel, dann SPIELEN drücken." },
+        { L" isn't set up here yet - room code filled in.", L" ist hier noch nicht eingerichtet - Raumcode eingetragen." },
+        { L"  -  installed", L"  -  installiert" },
         { L"Your last game sessions. Crashed ones are red - send us the report zip or copy the log into Discord.", L"Deine letzten Spielsitzungen. Abgestürzte sind rot - schick uns die Bericht-Zip oder kopier das Log in Discord." },
         { L"No logs yet - they show up here after you played this chapter once.", L"Noch keine Logs - sie erscheinen hier, sobald du dieses Kapitel einmal gespielt hast." },
         { L"Crashed", L"Abgestürzt" },
@@ -379,76 +392,7 @@ static std::wstring tr(const std::wstring& en) {
 
 // "What's new" page: this version's items first, then earlier versions in short (old = shown dimmed)
 struct NewsItem { bool old; const wchar_t* title; const wchar_t* text; const wchar_t* title_de; const wchar_t* text_de; };
-static const NewsItem NEWS[] = {
-    { false, L"Teleports, vents, breakers",
-      L"Chapter 1: no more teleport back to the power room when the other respawns, the vents after Make-A-Friend load for both, no invisible wall, breakers synced (pickup + inventory).",
-      L"Teleports, Lüftung, Breaker",
-      L"Kapitel 1: kein Zurück-Teleport mehr in den Power Room, wenn der andere respawnt, die Lüftung nach Make-A-Friend lädt bei beiden, keine unsichtbare Wand, Breaker abgeglichen (Aufheben + Inventar)." },
-    { false, L"Doors, falling, Make-A-Friend",
-      L"Chapter 1: doors no longer shut in front of you, no more falling through the floor when a friend moves on, Make-A-Friend levers synced, hands for everyone, flashlight on F, local host joins by itself.",
-      L"Türen, Durchfallen, Make-A-Friend",
-      L"Kapitel 1: Türen gehen nicht mehr vor dir zu, kein Durch-den-Boden-Fallen mehr, wenn ein Freund weitergeht, Make-A-Friend-Hebel abgeglichen, Hände für alle, Taschenlampe auf F, zweites Spiel auf einem PC tritt selbst bei." },
-    { false, L"Load Game, key, toy, breakers",
-      L"Chapter 1: Load Game starts at the team's furthest checkpoint. Huggy's key and the Make-A-Friend toy are gone for everyone once taken (also in Speedrun mode), breaker colours match, the vent door opens for all. Chapter 2: a crash fixed.",
-      L"Spiel laden, Schlüssel, Spielzeug, Breaker",
-      L"Kapitel 1: Spiel laden startet am weitesten Checkpoint des Teams. Huggys Schlüssel und das Make-A-Friend-Spielzeug sind für alle weg, sobald einer sie nimmt (auch im Speedrun-Modus), die Breaker-Farben stimmen, die Lüftungstür geht bei allen auf. Kapitel 2: ein Absturz behoben." },
-    { false, L"Chapter 1: breakers and blue hand box",
-      L"The breakers in the red hand room lie on the same spots for everyone, and one picked up is gone for everyone. The blue hand box no longer stands open after New Game.",
-      L"Kapitel 1: Breaker und Blaue-Hand-Box",
-      L"Die Breaker im Raum mit der roten Hand liegen bei allen an denselben Stellen, und ein aufgehobener ist bei allen weg. Die Box der blauen Hand steht nach Neues Spiel nicht mehr offen." },
-    { false, L"Chapter 1: Steam Hallway crash fixed",
-      L"Both players crashed in the Steam Hallway when the Storage area (red hand) loaded. Fixed.",
-      L"Kapitel 1: Absturz im Dampfgang behoben",
-      L"Beide Spieler stürzten im Dampfgang ab, sobald der Storage-Bereich (rote Hand) geladen wurde. Behoben." },
-    { false, L"Chapter 1: power room",
-      L"The short circuit at the power room scanner and the power puzzle are synced: the power goes out and comes back for everyone. Plus a crash fix after areas load.",
-      L"Kapitel 1: Power Room",
-      L"Der Kurzschluss am Power-Room-Scanner und das Strom-Rätsel werden abgeglichen: Der Strom geht bei allen aus und kommt bei allen wieder. Dazu ein Absturz-Fix nach dem Laden von Bereichen." },
-    { false, L"Scanners, New Game, furnace doors",
-      L"Chapter 1: hand scanners are synced even when both players have power, no more crash after the power part, New Game starts completely fresh. Chapter 2: the furnace doors work again (no more flickering).",
-      L"Scanner, Neues Spiel, Ofentüren",
-      L"Kapitel 1: Handscanner werden auch abgeglichen, wenn beide Strom haben, kein Absturz mehr nach dem Strom-Teil, Neues Spiel startet komplett frisch. Kapitel 2: Die Ofentüren funktionieren wieder (kein Flackern mehr)." },
-    { false, L"Fewer crashes",
-      L"Crashes after dying, respawning or teleporting to a friend (mostly Chapter 2) and after roll-up doors in Chapter 1 are fixed. Syncing no longer stops after joining.",
-      L"Weniger Abstürze",
-      L"Abstürze nach Tod, Respawn oder Teleport zum Freund (vor allem Kapitel 2) und nach Rolltoren in Kapitel 1 sind behoben. Der Abgleich hört nach dem Beitreten nicht mehr auf." },
-    { false, L"Chapter 1: scanners and code door",
-      L"Hand scanners are synced live (everyone sees the scan) and the door behind the security code opens for everyone. After New Game it stays closed.",
-      L"Kapitel 1: Scanner und Codetür",
-      L"Handscanner werden live abgeglichen (alle sehen den Scan), und die Tür hinter dem Sicherheitscode geht bei allen auf. Nach Neues Spiel bleibt sie zu." },
-    { false, L"New Game starts clean",
-      L"After New Game, doors that were opened before stayed open. Now a new game starts fresh - Load Game and respawns still restore everything.",
-      L"Neues Spiel startet sauber",
-      L"Nach Neues Spiel blieben vorher geöffnete Türen offen. Jetzt beginnt ein neues Spiel frisch - Spiel laden und Respawn stellen weiter alles wieder her." },
-    { false, L"Split screen",
-      L"Several games at once (launcher settings): the windows are placed left / right, top / bottom or one per monitor, without frames, and stay where they are.",
-      L"Splitscreen",
-      L"Mehrere Spiele gleichzeitig (Launcher-Einstellungen): Die Fenster werden links / rechts, oben / unten oder pro Monitor angeordnet, ohne Rahmen, und bleiben an ihrem Platz." },
-    { false, L"Chapter 1: hand scanner doors",
-      L"When a player opens a roll-up door with a hand scanner (or the two-hand pad / power room pad), it opens for everyone now - before only the scanner turned green.",
-      L"Kapitel 1: Handscanner-Tore",
-      L"Öffnet ein Spieler ein Rolltor mit einem Handscanner (oder dem Zwei-Hand-Scanner / Power-Room-Scanner), geht es jetzt bei allen auf - vorher wurde nur der Scanner grün." },
-    { true, L"1.6.1: Friends",
-      L"Every player has a friend code like Max#12345 (Friends, bottom left). Send a request - accepted friends show when they are online, in which chapter and room, and you can join them with one click.",
-      L"1.6.1: Freunde",
-      L"Jeder hat einen Freundes-Code wie Max#12345 (Freunde, unten links). Schick eine Anfrage - angenommene Freunde siehst du online, mit Kapitel und Raum, und kannst ihnen mit einem Klick beitreten." },
-    { true, L"1.6.1: Crash reports",
-      L"If you allow it, the launcher sends a crash report when the game crashes (error, end of the log, versions - no user names). Launcher settings: Send crash reports.",
-      L"1.6.1: Absturzberichte",
-      L"Wenn du es erlaubst, schickt der Launcher bei einem Absturz einen Bericht (Fehler, Log-Ende, Versionen - ohne Benutzernamen). Launcher-Einstellungen: Absturzberichte senden." },
-    { true, L"1.6.0: Co-op only when started here",
-      L"The mod is only active when you start the game with PLAY in this launcher. Started from Steam, the game is normal (other UE4SS mods still work). Launcher settings: \"Co-op without the launcher\" turns it on for Steam starts too (Steam Deck game mode).",
-      L"1.6.0: Koop nur beim Start von hier",
-      L"Der Mod ist nur aktiv, wenn du das Spiel mit SPIELEN in diesem Launcher startest. Über Steam gestartet ist das Spiel normal (andere UE4SS-Mods laufen weiter). Launcher-Einstellungen: \"Koop auch ohne Launcher\" schaltet ihn auch für Steam-Starts ein (Steam-Deck-Spielmodus)." },
-    { true, L"1.5.9: Linux & Steam Deck: AppImage",
-      L"PoppyCoop_Launcher.AppImage is on GitHub now. Make it executable and double-click it - it finds Steam and Proton by itself.",
-      L"1.5.9: Linux & Steam Deck: AppImage",
-      L"Auf GitHub gibt es jetzt PoppyCoop_Launcher.AppImage. Ausführbar machen, doppelklicken - sie findet Steam und Proton selbst." },
-    { true, L"1.5.8: Logs page",
-      L"Every chapter has a Logs page (next to Settings): your last sessions with time, length and errors, crashed ones in red. Chapter 2 is out of beta.",
-      L"1.5.8: Logs-Seite",
-      L"Jedes Kapitel hat eine Logs-Seite (neben Einstellungen): deine letzten Sitzungen mit Zeit, Dauer und Fehlern, abgestürzte in Rot. Kapitel 2 ist keine Beta mehr." },
-};
+// (the "What's new" page shows release/notes of every version: see draw_news)
 enum { TIMER_POLL = 1, TIMER_CARET = 2, TIMER_ANIM = 3, TIMER_PROBE = 4, TIMER_MINSIZE = 5, TIMER_SPLIT = 6 };
 
 // ------------------------------------------------------------------ state
@@ -1652,25 +1596,85 @@ static void draw_logs(int h) {
 }
 
 // ------------------------------------------------------------------ what's new page
+// Every update with its changes (release/notes, built in by tools/gen_news.py): the list on the left, the selected
+// update's changes on the right - like the Logs page. Wheel / arrow keys pick an update, the wheel over the
+// changes scrolls them.
+#include "build/news_data.h"
+static const int NEWS_N = (int)(sizeof(RELEASES) / sizeof(RELEASES[0]));
+static int g_news_sel = 0, g_news_scroll = 0, g_news_max = 0;
+static RECT g_news_view = {};
+static void news_select(int i) { g_news_sel = std::max(0, std::min(NEWS_N - 1, i)); g_news_scroll = 0; }
+static int text_h(const std::wstring& s, HFONT f, int w) {          // height (layout units) of wrapped text
+    SelectObject(g_dc, f);
+    RECT rr = { 0, 0, S(w), 0 };
+    DrawTextW(g_dc, s.c_str(), (int)s.size(), &rr, DT_LEFT | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+    return (int)((rr.bottom - rr.top) / g_s + 0.999);
+}
 static void draw_news(int h) {
     button(MX, 26, 96, 32, tr(L"\x2039  Back"), Btn::Ghost, [] { g_page = g_news_back; });
     text(R(MX + 112, 22, MW - 112, 18), tr(L"WHAT'S NEW"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
     text(R(MX + 112, 38, MW - 360, 30), L"PoppyCoop v" MOD_VERSION, F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
-    const bool de = g_lang == 1;
-    const int n = (int)(sizeof(NEWS) / sizeof(NEWS[0]));
-    const int top = 84, bottom = h - 50, gap = 8;
-    const int ch = std::max(58, std::min(90, (bottom - top) / n - gap));     // card height from the room there is
-    int y = top;
-    for (int i = 0; i < n && y + ch <= bottom; i++) {
-        const NewsItem& it = NEWS[i];
-        RECT r = R(MX, y, MW, ch);
-        fill(r, it.old ? mix(C_BG, C_CARD, 0.55) : C_CARD, 12);
-        if (!it.old) fill(R(MX, y + 12, 4, ch - 24), accent(), 2);
-        text(R(MX + 22, y + 10, MW - 44, 20), de ? it.title_de : it.title, F_BOLD, it.old ? C_DIM : C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        text(R(MX + 22, y + 32, MW - 44, ch - 38), de ? it.text_de : it.text, F_SMALL, C_DIM, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
-        y += ch + gap;
-    }
     button(MX + MW - 230, 30, 230, 32, tr(L"All releases on GitHub"), Btn::Ghost, [] { ShellExecuteW(nullptr, L"open", RELEASES_PAGE, nullptr, nullptr, SW_SHOWNORMAL); });
+    if (NEWS_N == 0) return;
+    if (g_news_sel >= NEWS_N) g_news_sel = 0;
+    const int LW = std::max(240, std::min(300, MW * 2 / 5)), RH = 52, top = 84;
+    const int fit = std::max(1, (h - top - 30) / (RH + 6));
+    int first = std::max(0, std::min(g_news_sel - fit + 1, NEWS_N - fit));
+    first = std::max(0, std::min(first, g_news_sel));
+    for (int i = first; i < NEWS_N && i < first + fit; i++) {
+        const ReleaseNotes& rn = RELEASES[i];
+        int y = top + (i - first) * (RH + 6);
+        RECT r = R(MX, y, LW, RH);
+        bool sel = i == g_news_sel, mine = std::wstring(rn.ver) == MOD_VERSION;
+        fill(r, sel ? mix(C_CARD, accent(), 0.18) : hover(r) ? C_CARD2 : C_CARD, 10);
+        if (sel) frame(r, accent(), 10, 2);
+        circle(MX + 18, y + RH / 2, 5, i == 0 ? accent() : mix(C_DIM, C_CARD, 0.3));
+        text(R(MX + 32, y + 7, LW - 44, 20), L"v" + std::wstring(rn.ver) + (mine ? tr(L"  -  installed") : L""), F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        text(R(MX + 32, y + 28, LW - 44, 18), g_lang == 1 ? rn.summary_de : rn.summary, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        click(r, [i] { news_select(i); });
+    }
+    if (NEWS_N > fit) {
+        int y = top + fit * (RH + 6) - 2;
+        text(R(MX, y, LW, 18), std::to_wstring(g_news_sel + 1) + L" / " + std::to_wstring(NEWS_N) + tr(L"  -  arrow keys / click"), F_SMALL, C_DIM, DT_CENTER | DT_SINGLELINE);
+    }
+    // the selected update's changes (one bullet per line of its notes), scrollable
+    const ReleaseNotes& rn = RELEASES[g_news_sel];
+    const int PX = MX + LW + 12, PW = MW - LW - 12, PH = h - top - 30;
+    fill(R(PX, top, PW, PH), C_CARD, 14);
+    text(R(PX + 18, top + 14, PW - 36, 18), tr(L"UPDATE"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(PX + 18, top + 32, PW - 36, 28), L"v" + std::wstring(rn.ver), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE);
+    const int vy = top + 72, vh = PH - 72 - 14, tw = PW - 36 - 22;
+    g_news_view = R(PX, vy, PW, vh);
+    std::vector<std::wstring> items;
+    for (const wchar_t* p = g_lang == 1 ? rn.items_de : rn.items; *p; ) {
+        const wchar_t* q = wcschr(p, L'\n');
+        items.emplace_back(p, q ? q - p : wcslen(p));
+        if (!q) break;
+        p = q + 1;
+    }
+    int total = 0;
+    std::vector<int> hs;
+    for (auto& it : items) { int hh = text_h(it, F_BODY, tw); hs.push_back(hh); total += hh + 12; }
+    g_news_max = std::max(0, total - vh);
+    g_news_scroll = std::max(0, std::min(g_news_scroll, g_news_max));
+    int saved = SaveDC(g_dc);
+    RECT clip = g_news_view;
+    IntersectClipRect(g_dc, clip.left, clip.top, clip.right, clip.bottom);
+    int y = vy - g_news_scroll;
+    for (size_t k = 0; k < items.size(); k++) {
+        if (y + hs[k] >= vy && y <= vy + vh) {
+            circle(PX + 24, y + 10, 3, accent());
+            text(R(PX + 36, y, tw, hs[k] + 4), items[k], F_BODY, C_TEXT, DT_LEFT | DT_TOP | DT_WORDBREAK);
+        }
+        y += hs[k] + 12;
+    }
+    RestoreDC(g_dc, saved);
+    if (g_news_max > 0) {                          // scroll position
+        int th = vh, bh = std::max(24, th * vh / std::max(1, total));
+        int bt = (th - bh) * g_news_scroll / std::max(1, g_news_max);
+        fill(R(PX + PW - 14, vy, 6, th), mix(C_CARD, C_LINE, 0.6), 3);
+        fill(R(PX + PW - 14, vy + bt, 6, bh), mix(C_DIM, C_TEXT, 0.2), 3);
+    }
 }
 
 // ------------------------------------------------------------------ profile page
@@ -1860,13 +1864,20 @@ static void friends_refresh() {
     g_met = players_met(dirs, g_prof.name);
     friends_update_from(g_met);
 }
-static void join_friend_room(const Friend& f) {
+static void do_play();
+// join a friend's room: picks their chapter and starts the game right away (chapter 0 = unknown: the selected one)
+static void join_friend_room(const Friend& f, int chapter = 0) {
     g_prof.join_code = f.room;
     g_prof.tab = 2;
+    for (size_t i = 0; chapter > 0 && i < g_ch.size(); i++) if (g_ch[i].num == chapter && playable(g_ch[i])) { g_sel = (int)i; break; }
     save_profile();
     g_page = Page::Chapter;
     g_focus = {};
-    toast(tr(L"Room code of ") + f.name + L": " + f.room + tr(L" - press PLAY to join."));
+    if (chapter > 0 && cur().num != chapter) { toast(tr(L"Chapter ") + std::to_wstring(chapter) + tr(L" isn't set up here yet - room code filled in.")); return; }
+    for (size_t i = 0; i < g_ch.size() && i < 8; i++)
+        if (g_running[i]) { toast(tr(L"Room code of ") + f.name + L": " + f.room + tr(L" - close the game, then press PLAY.")); return; }
+    toast(tr(L"Joining ") + f.name + L" (" + f.room + L")...");
+    do_play();
 }
 static void add_friend_toast(const Friend& f, AddResult r) {
     switch (r) {
@@ -1937,6 +1948,7 @@ static std::wstring fnet_error_text(const std::string& e) {
     if (e == "already") return tr(L"You are already friends.");
     if (e == "limit") return tr(L"Too many requests - try again later.");
     if (e == "bad_auth") return tr(L"Friends server: your account key doesn't match.");
+    if (e == "not_friends") return tr(L"You can only invite friends.");
     return tr(L"Friends server error: ") + wide(e);
 }
 static void on_friends_result(FriendsResult* r) {
@@ -1949,7 +1961,16 @@ static void on_friends_result(FriendsResult* r) {
     if (!r->reachable || r->error == "not_set_up") { g_fnet_state = 2; return; }
     g_fnet_state = 1;
     if (r->has_list || (r->action == "list" && r->error.empty())) {
-        g_fnet.friends = r->friends; g_fnet.incoming = r->incoming; g_fnet.outgoing = r->outgoing;
+        for (auto& v : r->invites) {                    // a new invite: tell the player even on another page
+            bool seen = false;
+            for (auto& o : g_fnet.invites) if (o.code == v.code && o.room == v.room) seen = true;
+            if (!seen) {
+                toast(v.code + tr(L" invites you - open Friends to join."));
+                FLASHWINFO fw = { sizeof(fw), g_wnd, FLASHW_TRAY | FLASHW_TIMERNOFG, 3, 0 };
+                FlashWindowEx(&fw);
+            }
+        }
+        g_fnet.friends = r->friends; g_fnet.incoming = r->incoming; g_fnet.outgoing = r->outgoing; g_fnet.invites = r->invites;
     }
     if (r->action == "request") {
         if (r->error.empty()) toast(r->ok_word == "friends" ? tr(L"You are friends now!") : tr(L"Friend request sent."));
@@ -1958,9 +1979,27 @@ static void on_friends_result(FriendsResult* r) {
         toast(r->ok_word == "friends" ? tr(L"You are friends now!") : tr(L"Request declined."));
     } else if (r->action == "remove" && r->error.empty()) {
         toast(tr(L"Removed."));
+    } else if (r->action == "invite") {
+        if (r->error.empty()) { if (r->ok_word == "invited") toast(tr(L"Invite sent - they see it in their launcher.")); }
+        else if (r->error == "not_found") toast(tr(L"Invites need the new friends server - coming soon."));
+        else toast(fnet_error_text(r->error));
     } else if (!r->error.empty() && r->action != "list" && r->action != "hello") {
         toast(fnet_error_text(r->error));
     }
+}
+// a friend code: the name bold, "#12345" behind it small and dim, so the name stands out
+static void draw_code(int x, int y, int w, const std::wstring& code, const std::wstring& after = L"") {
+    size_t k = code.find(L'#');
+    std::wstring name = k == std::wstring::npos ? code : code.substr(0, k);
+    std::wstring tag = k == std::wstring::npos ? L"" : code.substr(k);
+    int nw = std::min(w, text_w(name, F_BOLD));
+    text(R(x, y, nw + 2, 20), name, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    int tx = x + nw + 2;
+    if (!tag.empty() && tx < x + w) {
+        text(R(tx, y + 3, x + w - tx, 18), tag, F_SMALL, mix(C_DIM, C_CARD, 0.25), DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        tx += text_w(tag, F_SMALL) + 2;
+    }
+    if (!after.empty() && tx < x + w) text(R(tx, y, x + w - tx, 20), after, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void draw_friends_local(int h);
 static void draw_friends(int h) {
@@ -1980,12 +2019,26 @@ static void draw_friends(int h) {
         g_friend_edit.clear();
     });
     int y = 178;
+    // invites into a friend's room: one click joins (starts the game)
+    for (size_t i = 0; i < g_fnet.invites.size() && y < h - 200; i++) {
+        const NetInvite v = g_fnet.invites[i];
+        RECT r = R(MX, y, MW, 50);
+        fill(r, mix(C_CARD, C_OK, 0.16), 10);
+        draw_code(MX + 18, y + 6, MW - 380, v.code, tr(L" invites you"));
+        text(R(MX + 18, y + 26, MW - 380, 18), tr(L"Chapter ") + std::to_wstring(v.chapter) + tr(L" - room ") + v.room, F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
+        button(MX + MW - 330, y + 8, 180, 34, tr(L"Join now"), Btn::Primary, [v] {
+            friends_net_do("invite", L"/v1/invite", { { "code", utf8(v.code) }, { "dismiss", "1" } });
+            join_friend_room(Friend{ parse_code(v.code).name, L"", v.room }, v.chapter);
+        });
+        button(MX + MW - 140, y + 8, 124, 34, tr(L"Dismiss"), Btn::Ghost, [v] { friends_net_do("invite", L"/v1/invite", { { "code", utf8(v.code) }, { "dismiss", "1" } }); });
+        y += 56;
+    }
     // incoming requests
     for (size_t i = 0; i < g_fnet.incoming.size() && y < h - 200; i++) {
         std::wstring code = g_fnet.incoming[i];
         RECT r = R(MX, y, MW, 50);
         fill(r, mix(C_CARD, accent(), 0.12), 10);
-        text(R(MX + 18, y + 6, MW - 380, 20), code, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_code(MX + 18, y + 6, MW - 380, code);
         text(R(MX + 18, y + 26, MW - 380, 18), tr(L"wants to be your friend"), F_SMALL, C_DIM, DT_LEFT | DT_SINGLELINE);
         button(MX + MW - 330, y + 8, 180, 34, tr(L"Accept"), Btn::Primary, [code] { friends_net_do("respond", L"/v1/respond", { { "code", utf8(code) }, { "accept", "1" } }); });
         button(MX + MW - 140, y + 8, 124, 34, tr(L"Decline"), Btn::Ghost, [code] { friends_net_do("respond", L"/v1/respond", { { "code", utf8(code) }, { "accept", "0" } }); });
@@ -1998,12 +2051,23 @@ static void draw_friends(int h) {
         RECT r = R(MX, y, MW, 50);
         fill(r, mix(C_CARD, C_CARD2, anim(akey(51, (int)i, 0), hover(r) ? 0.7 : 0.0, 16)), 10);
         circle(MX + 22, y + 25, 6, f.online ? C_OK : mix(C_DIM, C_CARD, 0.4));
-        text(R(MX + 38, y + 6, MW - 400, 20), f.code, F_BOLD, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_code(MX + 38, y + 6, MW - 400, f.code);
         std::wstring st = !f.online ? tr(L"Offline") : f.chapter > 0 ? tr(L"Playing Chapter ") + std::to_wstring(f.chapter) + (f.room.empty() ? L"" : tr(L" - room ") + f.room) : tr(L"Online");
         text(R(MX + 38, y + 26, MW - 400, 18), st, F_SMALL, f.online ? C_OK : C_DIM, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (f.online && !f.room.empty()) {
             Friend jf{ parse_code(f.code).name, L"", f.room };
-            button(MX + MW - 330, y + 8, 180, 34, tr(L"Join"), Btn::Secondary, [jf] { join_friend_room(jf); });
+            int fc = f.chapter;
+            button(MX + MW - 330, y + 8, 180, 34, tr(L"Join"), Btn::Secondary, [jf, fc] { join_friend_room(jf, fc); });
+        } else if (f.online) {                         // in the launcher: invite them into my room
+            std::wstring code = f.code;
+            button(MX + MW - 330, y + 8, 180, 34, tr(L"Invite"), Btn::Secondary, [code] {
+                std::wstring room = hello_info().room;
+                int chn = cur().num;
+                if (room.empty()) { room = room_for(g_prof); for (auto& c : room) c = towupper(c); }
+                for (size_t k = 0; k < g_ch.size() && k < 8; k++) if (g_running[k]) chn = g_ch[k].num;
+                if (room.empty()) { toast(tr(L"Pick Create Game first - then invite.")); return; }
+                friends_net_do("invite", L"/v1/invite", { { "code", utf8(code) }, { "chapter", std::to_string(chn) }, { "room", utf8(room) } });
+            });
         }
         button(MX + MW - 140, y + 8, 124, 34, tr(L"Remove"), Btn::Ghost, [f] { friends_net_do("remove", L"/v1/remove", { { "code", utf8(f.code) } }); });
         y += 56;
@@ -2637,6 +2701,17 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MOUSEWHEEL:
+        if (g_page == Page::News) {
+            POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            ScreenToClient(h, &p);
+            p.y -= bar_h();
+            int notches = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+            if (!notches) notches = GET_WHEEL_DELTA_WPARAM(wp) < 0 ? -1 : 1;
+            if (PtInRect(&g_news_view, p)) g_news_scroll = std::max(0, std::min(g_news_max, g_news_scroll - notches * 40));
+            else news_select(g_news_sel - notches);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
         if (g_page == Page::Logs && !g_logs.empty()) {
             POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             ScreenToClient(h, &p);
@@ -2650,6 +2725,11 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (g_capture >= 0) { set_key((UINT)wp); InvalidateRect(h, nullptr, FALSE); return 0; }
+        if (g_page == Page::News && (wp == VK_UP || wp == VK_DOWN)) {
+            news_select(g_news_sel + (wp == VK_DOWN ? 1 : -1));
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
         if (g_page == Page::Logs && !g_logs.empty() && (wp == VK_UP || wp == VK_DOWN)) {
             log_select(std::max(0, std::min((int)g_logs.size() - 1, g_log_sel + (wp == VK_DOWN ? 1 : -1))));
             InvalidateRect(h, nullptr, FALSE); return 0;
@@ -2726,10 +2806,18 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             if (g_crash_check_at && nw > g_crash_check_at) { g_crash_check_at = 0; maybe_report_crashes(); }
             // friends: status heartbeat + list every 60 s (only once the player has opened the friends page);
             // the list every 15 s while the page is open
-            if (FEATURE_ONLINE && friends_used() && !g_fnet_busy && nw - g_fnet_hello_at > (g_fnet_state == 2 ? 300000ULL : 60000ULL)) friends_net_sync(true);
-            else if (g_page == Page::Friends && !g_fnet_busy && g_fnet_state == 1 && nw - g_fnet_hello_at > 15000) {
+            // (a game started / ended: say so right away, so friends see the room code at once)
+            static int was_playing = -1;
+            int playing = 0;
+            for (size_t i = 0; i < g_ch.size() && i < 8; i++) if (g_running[i]) playing = 1;
+            bool status_changed = was_playing >= 0 && playing != was_playing && g_fnet_state == 1;
+            if (!g_fnet_busy) was_playing = playing;
+            bool any_online = false;
+            for (auto& f : g_fnet.friends) if (f.online) any_online = true;
+            if (FEATURE_ONLINE && friends_used() && !g_fnet_busy && (status_changed || nw - g_fnet_hello_at > (g_fnet_state == 2 ? 300000ULL : 30000ULL))) friends_net_sync(true);
+            else if ((g_page == Page::Friends || any_online) && !g_fnet_busy && g_fnet_state == 1 && nw - g_fnet_hello_at > 10000) {
                 static ULONGLONG list_at = 0;
-                if (nw - list_at > 15000) { list_at = nw; friends_net_sync(false); }
+                if (nw - list_at > 10000) { list_at = nw; friends_net_sync(false); }
             }
             if (!g_toast.empty() && nw > g_toast_until + 1500) g_toast.clear();   // after its fade-out
             if (changed || (!g_toast.empty() && nw > g_toast_until)) InvalidateRect(h, nullptr, FALSE);
@@ -3015,6 +3103,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     }
     for (size_t i = 0; i < g_ch.size() && i < 8; i++) g_running[i] = game_running(g_ch[i]);
     open_invite(arg);
+    if (env(L"POPPYCOOP_LAUNCHER_TEST") == L"1") {          // test: open a page directly (screenshots)
+        std::wstring pg = env(L"POPPYCOOP_LAUNCHER_PAGE");
+        if (pg == L"news") g_page = Page::News;
+        else if (pg == L"friends") { g_page = Page::Friends; friends_refresh(); g_friends_on = 1; friends_net_sync(true); }
+        else if (pg == L"servers") g_page = Page::Servers;
+    }
     ShowWindow(g_wnd, show);
     UpdateWindow(g_wnd);
     if (after_update) toast(tr(L"Updated to v") + MOD_VERSION);

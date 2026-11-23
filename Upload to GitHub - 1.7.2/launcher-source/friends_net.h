@@ -18,6 +18,11 @@ struct NetFriend {
     int chapter = 0;        // 0 = not in a game
     std::wstring room;      // their room while in a game ("" = none)
 };
+struct NetInvite {
+    std::wstring code;      // who invites (Name#12345)
+    int chapter = 0;
+    std::wstring room;
+};
 struct FriendsResult {
     bool reachable = false;          // the server answered at all
     std::string error;               // E code of the action (empty = ok)
@@ -26,6 +31,7 @@ struct FriendsResult {
     bool has_list = false;
     std::vector<NetFriend> friends;
     std::vector<std::wstring> incoming, outgoing;
+    std::vector<NetInvite> invites;  // friends inviting us into their room (V lines)
 };
 
 static std::wstring random_hex(size_t n) {
@@ -130,6 +136,14 @@ static void parse_answer(const std::string& body, FriendsResult& r) {
         std::wstring rest = wide(l.substr(2));
         if (l[0] == 'I') { r.has_list = true; r.incoming.push_back(rest); }
         else if (l[0] == 'O') { r.has_list = true; r.outgoing.push_back(rest); }
+        else if (l[0] == 'V') {
+            NetInvite v;
+            std::wstring parts[3];
+            int k = 0;
+            for (wchar_t ch : rest) { if (ch == L' ' && k < 2) k++; else parts[k] += ch; }
+            v.code = parts[0]; v.chapter = _wtoi(parts[1].c_str()); v.room = parts[2];
+            if (!v.code.empty() && !v.room.empty()) r.invites.push_back(v);
+        }
         else if (l[0] == 'F') {
             r.has_list = true;
             NetFriend f;

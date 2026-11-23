@@ -6,6 +6,7 @@ SCRIPTS=${1:-../../mod/Scripts}
 VER=$(grep -oP 'local VERSION = "\K[0-9.]+' "$SCRIPTS/main.lua")
 [ -n "$VER" ] || { echo "VERSION not found in $SCRIPTS/main.lua"; exit 1; }
 mkdir -p build
+python3 ../../tools/gen_news.py ../../release/notes build/news_data.h     # "What's new" page: every release's notes
 cat > build/launcher.rc <<RC
 1 ICON "res/app.ico"
 1 24 "manifest.xml"

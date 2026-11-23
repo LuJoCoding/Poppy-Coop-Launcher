@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.7.1.zip`**
+Download **`PoppyCoop_Launcher_1.7.2.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,12 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.2
+- **Launcher: "What's new" lists every update.** Pick a version on the left to see all its changes on the right (scroll with the mouse wheel), like the Logs page.
+- **Friends: Invite.** Next to an online friend: Invite - they get a notice in their launcher and join your room with one click (needs the friends server update).
+- **Friends: Join starts the game right away** in the friend's chapter and room - no more copying codes and pressing PLAY.
+- **Friends: room codes show up much faster.** The launcher tells your friends right when you start or close a game and checks every 10 seconds while friends are online (before: up to a minute).
 
 ### 1.7.1
 - **Fixed (Chapter 1): your friend got teleported back to the power room** whenever you respawned or pressed Load Game. The game's checkpoint-loading script was sent to them and ran in their game.
