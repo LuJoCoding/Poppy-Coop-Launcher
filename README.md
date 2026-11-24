@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.7.3.zip`](Upload%20to%20GitHub%20-%201.7.3/PoppyCoop_Launcher_1.7.3.zip)**
-(folder `Upload to GitHub - 1.7.3`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.7.4.zip`](Upload%20to%20GitHub%20-%201.7.4/PoppyCoop_Launcher_1.7.4.zip)**
+(folder `Upload to GitHub - 1.7.4`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,15 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.4
+- **Chapter 1 VHS tapes:** when a friend puts a tape into a recorder, it goes in for you too - the tape slides in and the film plays in both games (before, the tape only vanished from your inventory).
+- **Chapter 1 tapes on the floor:** when a friend picks up a tape, it now disappears from your world too (before, it often stayed lying there).
+- **Chapter 1 red + blue hand scanner** (the double scanner in the room with the red hand, and in the Hub): when one player completes it, it is completed for everyone - also when you load that area later or join later.
+- **Different settings warning:** if a friend in your room plays with other switches (speedrun, harder enemies, shared items...), the game tells you, and the launcher shows their settings with a button to take them - the game then restarts by itself and joins the same room.
+- **Start message:** when you get into the game, a short line shows the mod version and your room code.
+- **Teleport (F6):** holding the key no longer fires hundreds of teleports (one per second at most).
+- **Crash reports** now say when the crash happened and when it was sent. If the game log is still locked right after a crash, the launcher tries again a few times; if it still can't be read, the report says why.
 
 ### 1.7.3
 - **Fixed (Chapter 1): your friend got pulled back to the power puzzle** (the one after the red hand and the breakers). Solving it starts the game's ride, and the mod re-ran it in the friend's game every time that area loaded again - wherever they were. Power puzzles are now only shared while the other player has the puzzle loaded, never re-run later.

@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.7.3"   -- 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.7.4"   -- 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -2521,6 +2521,10 @@ end
 -- Start a teleport: pick the friend, then tp_tick loads their area first and teleports when it's there.
 local function teleport_to_friend(want)
     if not valid(Game.pawn) then return end
+    -- one teleport at a time, at most one per second: a held F6 (key repeat) teleported ~10 times a second and
+    -- loaded areas over and over (a Chapter 2 crash report, 1.6.3)
+    if Tp or (Net.tp_at and game_time - Net.tp_at < 1) then return end
+    Net.tp_at = game_time
     local ids = {}
     for id, pl in pairs(Net.players) do
         local name_ok = type(want) ~= "string" or (pl.name or ""):lower() == want:lower()
@@ -3413,8 +3417,84 @@ table.insert(Handlers.tick, function()
     end
 end)
 
+------------------------------------------------------------------------ settings check
+-- Friends with different launcher switches (speedrun, harder enemies, shared items...) play different games.
+-- Each player tells every newcomer its switches ("cfg"); a difference is shown in the game and written to
+-- settings_friend.txt - the launcher then offers to take the friend's switches and restarts the game.
+-- (only switches that change what others see; fps / graphics / messages are each player's own)
+Net.SET_KEYS = { speedrun = "Speedrun mode", sync_activations = "Doors & puzzles", sync_destroy = "Picked-up items",
+    sync_inventory = "Shared inventory", sync_hands = "Shared hands", sync_physics = "Pullable objects",
+    bg_levels = "Friends' areas loaded", sync_minigames = "Minigames", auto_follow = "Follow out of chases",
+    respawn_at_friend = "Respawn at a friend", boost = "Solid friends", hard_mode = "Harder enemies",
+    sync_huggy = "Shared monsters" }
+Net.set_diff, Net.set_told = {}, {}
+Net.SET_FILE = MOD_DIR .. "\\settings_friend.txt"
+function Net.settings_line()
+    local t = {}
+    for k in pairs(Net.SET_KEYS) do
+        local v = Config[k]
+        if v == true or v == false then t[#t + 1] = k .. "=" .. (v and "1" or "0") end
+    end
+    table.sort(t)
+    return table.concat(t, ",")
+end
+-- one offer at a time: the friend with the lowest id who differs
+function Net.write_set_diff()
+    local best
+    for id, d in pairs(Net.set_diff) do if not best or id < best then best = id end end
+    local d = best and Net.set_diff[best]
+    if not d then pcall(os.remove, Net.SET_FILE); return end
+    local f = io.open(Net.SET_FILE, "w")
+    if not f then return end
+    f:write("name=", d.name, "\n")
+    local ks = {}
+    for k in pairs(d.keys) do ks[#ks + 1] = k end
+    table.sort(ks)
+    for _, k in ipairs(ks) do f:write(k, "=", d.keys[k] and "true" or "false", "\n") end
+    f:close()
+end
+table.insert(Handlers.join, function(id) if id < 900 then Coop.send_to(id, "cfg", Net.settings_line()) end end)
+table.insert(Handlers.leave, function(id)
+    if Net.set_diff[id] then Net.set_diff[id] = nil; Net.write_set_diff() end
+end)
+Coop.on("cfg", function(from, s)
+    if from >= 900 then return end
+    local pl = Net.players[from]
+    local name = pl and pl.name or "A player"
+    local keys, words = {}, {}
+    for k, v in tostring(s or ""):gmatch("([%w_]+)=([01])") do
+        local mine = Config[k]
+        if Net.SET_KEYS[k] and (mine == true or mine == false) and (v == "1") ~= mine then
+            keys[k] = v == "1"
+            words[#words + 1] = Net.SET_KEYS[k] .. (v == "1" and " on" or " off")
+        end
+    end
+    Net.set_diff[from] = #words > 0 and { name = name, keys = keys } or nil
+    Net.write_set_diff()
+    local key = name .. "=" .. tostring(s)
+    if #words > 0 and not Net.set_told[key] then
+        Net.set_told[key] = true
+        table.sort(words)
+        ver_popup(("%s plays with other settings: %s. Switch to the launcher to take them."):format(name, table.concat(words, ", ")))
+    end
+end)
+
+-- a short line when the game starts: mod version and the room code (once per map, so not after every death)
+table.insert(Handlers.tick, function(_, have)
+    if not have or Game.map == Net.banner_map then Net.banner_at = nil; return end
+    Net.banner_at = Net.banner_at or game_time + 2.5
+    if game_time < Net.banner_at then return end
+    Net.banner_map, Net.banner_at = Game.map, nil
+    local P2 = _G.PoppyCoop
+    local room = tostring(Config.room or ""):upper()
+    if P2 and P2.popup then
+        pcall(P2.popup, ("v%s  -  code: %s"):format(VERSION, room ~= "" and room or "-"), "join", "PoppyCoop")
+    end
+end)
+
 ------------------------------------------------------------------------ init
 load_config()
+pcall(os.remove, Net.SET_FILE)        -- an offer from the last session is out of date
 log("v%s loaded from %s | chapter %d%s | window %d | mode=%s name=%s host=%s:%d", VERSION, MOD_DIR, CHAPTER, EXPERIMENTAL and " (experimental)" or "", SLOT + 1, Config.mode, Config.name, Config.host_ip, Config.port)
 
 -- Expose for sibling modules (doors/puzzles etc. live in separate files)

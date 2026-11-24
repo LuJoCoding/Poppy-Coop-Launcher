@@ -138,12 +138,33 @@ static bool post_report(const std::vector<std::pair<std::string, std::string>>& 
 }
 
 // The log of the session that crashed: UE4SS.log, unless the game was started again after the crash (then the
-// launcher saved that session's log as UE4SS_previous.log before the new start)
-static std::string crashed_session_log(const std::wstring& ue4ss_dir, ULONGLONG crash_time) {
+// launcher saved that session's log as UE4SS_previous.log before the new start).
+// Some reports came without a log: the file can still be locked right after a crash (crash reporter, the game
+// still closing) -> a few tries. If it still can't be read, `why` says why (sent instead of the log).
+static std::string crashed_session_log(const std::wstring& ue4ss_dir, ULONGLONG crash_time, std::string& why) {
     std::wstring cur = ue4ss_dir + L"UE4SS.log", prev = ue4ss_dir + L"UE4SS_previous.log";
-    bool restarted = file_time(cur) > crash_time + 120 * FT_SECOND;
+    ULONGLONG cur_t = file_time(cur);
+    bool restarted = cur_t > crash_time + 120 * FT_SECOND;
+    const std::wstring& path = restarted ? prev : cur;
     std::string log;
-    if (!read_file(restarted ? prev : cur, log)) return "";
+    DWORD e = 0;
+    for (int i = 0; i < 6; i++) {
+        if (i) Sleep(2000);
+        if (read_file(path, log)) { e = 0; break; }
+        e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) break;      // won't come back
+    }
+    if (e || log.empty()) {
+        why = "UE4SS log not sent: " + std::string(restarted ? "UE4SS_previous.log" : "UE4SS.log") +
+              (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? " not found"
+               : e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION ? " locked by another program"
+               : e ? " unreadable (Windows error " + std::to_string(e) + ")" : " is empty") +
+              "\nfolder: " + utf8(ue4ss_dir) +
+              "\nUE4SS.log " + (cur_t ? "changed " + std::to_string((long long)(cur_t / FT_SECOND) - (long long)(crash_time / FT_SECOND)) + " s after the crash" : "missing") +
+              ", UE4SS_previous.log " + (file_time(prev) ? "exists" : "missing") + "\n";
+        why = hide_user_names(why);
+        return "";
+    }
     if (log.size() > REPORT_LOG_TAIL) log = "[... start cut ...]\n" + log.substr(log.size() - REPORT_LOG_TAIL);
     return hide_user_names(log);
 }
@@ -154,8 +175,10 @@ static bool send_crash_report(const Chapter& ch, const CrashInfo& ci, const std:
     std::string xml;
     read_file(ci.dir + L"CrashContext.runtime-xml", xml);
     xml = hide_user_names(xml);
-    std::string log = crashed_session_log(bin_dir(ch) + L"\\ue4ss\\", ci.time);
+    std::string why;
+    std::string log = crashed_session_log(bin_dir(ch) + L"\\ue4ss\\", ci.time, why);
     if (xml.empty() && log.empty()) { err = "crash report is empty"; return false; }
+    if (log.empty()) log = why;          // the reason instead of the log (shows up as the log file in Discord)
     std::string summary = xml.empty() ? std::string("(no crash context)") : crash_summary(xml);
     std::vector<std::pair<std::string, std::string>> fields = {
         { "version", utf8(mod_version) }, { "chapter", std::to_string(ch.num) },

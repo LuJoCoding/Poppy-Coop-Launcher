@@ -655,9 +655,33 @@ local function near_enough(path, a)
     return dx * dx + dy * dy + dz * dz < GATE_DIST * GATE_DIST
 end
 
-local VHS_DIST = 1500     -- cm: a friend's tape only plays for you when you stand at the recorder too
+-- VHS tapes: a friend put a tape in a recorder -> the same recorder plays it here too: the tape slides in (the
+-- recorder's InsertTape timeline) and when it is in, the recorder starts its TV's film by itself. (Chapter 1's
+-- recorder "On Interact" can't be replayed: its list parameter makes the call fail.) The tape leaves the team
+-- inventory through the friend's own "Remove Stored Item".
+local VHS_DIST = 1500     -- Chapter 2: a friend's tape only plays for you when you stand at the recorder too
+P.VhsDone = {}            -- recorder path -> true once a friend's tape went in here
 local function apply(e)
     if e.kind == "act" and (e.fn == "Trigger Checkpoint" or e.fn == "Save New Checkpoint") then RemoteCPUntil = P.game_time() + 3 end
+    if e.kind == "act" and e.fn == "On Interact" and e.path and e.path:find("VHSPlayerBP", 1, true) and P.CHAPTER == 1 then
+        local a = find_actor(e.path)
+        if not a then return false end
+        if P.VhsDone[e.path] then return true end
+        P.VhsDone[e.path] = true
+        local path = e.path
+        P.late(function()
+            local a2 = find_actor(path)
+            if not a2 then return end
+            local tl = try(function() return a2.InsertTape end)
+            local mesh = try(function() return a2.StaticMesh_VHS end)
+            if not (valid(tl) and valid(mesh)) then log("friend's tape: recorder parts missing (%s)", path); return end
+            if try(function() return tl:IsPlaying() end) == true then return end
+            pcall(function() mesh:SetVisibility(true, false) end)
+            pcall(function() tl:PlayFromStart() end)
+            log("friend's tape put in %s: playing it here too", path:match("([^.]+)$") or path)
+        end, "vhs")
+        return true
+    end
     if e.kind == "act" and e.fn == "On Interact" and e.path and e.path:find("VHSPlayerBP", 1, true) then
         local a = find_actor(e.path)
         local p = pawn()
@@ -1304,6 +1328,12 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     if INV_SET[fnname] and cname:find("PlayerBP", 1, true) then
         if fnname == "Add Stored Item In Inventory" then P.LastAddAt = P.game_time() end   -- (a real pickup: P.PickCheck)
+        local vt = fnname == "Remove Stored Item From Inventory" and tostring(args or ""):match("^s:(VHS[%w_]*)$")
+        if vt and P.VhsPress and P.game_time() - P.VhsPress.t < 2 and SYNC_ACT then
+            share({ kind = "act", path = P.VhsPress.path, fn = "On Interact", args = "a:" })
+            log("tape %s put in %s: shared", vt, P.VhsPress.path:match("([^.]+)$") or "")
+            P.VhsPress = nil
+        end
         if not SYNC_INV then return end
         local rn = fnname == "Remove Stored Item From Inventory" and tostring(args or ""):match("^s:([%w_]+)$")
         if rn and P.InvEcho[rn] and P.game_time() - P.InvEcho[rn] < 3 then
@@ -1377,6 +1407,21 @@ local function on_local_call(cname, fnname, ctx, ...)
     end
     if fnname == "On Interact" and is_level_placed(path) then
         watch_actor(path)
+        -- the VHS recorder's On Interact has a list parameter (Chapter 1 can't send lists): it is never read
+        -- by the recorder, so it is sent empty - then a friend's tape plays in everyone's game
+        if P.CHAPTER == 1 and path:find("VHSPlayerBP", 1, true) then
+            -- Chapter 1 recorder: pressing it without the right tape does nothing - sent only when it really
+            -- took a tape from the inventory right then (see the inventory hook)
+            P.VhsPress = { path = path, t = P.game_time() }
+            return
+        end
+        -- Chapter 1 tapes (VHS_BP*): the tape often stays in the world (hidden) for longer than the watch
+        -- above -> it never got removed for the friend. Picked up = it went into the inventory right then
+        -- (checked a moment later in P.PickCheck, like "Pick Up Object")
+        if P.CHAPTER == 1 and SYNC_DESTROY and path:find("VHS", 1, true) then
+            P.PickCheck[path] = P.game_time() + 1.0
+            return
+        end
         if SYNC_ACT and replay_interact(path) and args then
             share({ kind = "act", path = path, fn = fnname, args = args })
         end
@@ -2548,6 +2593,7 @@ Coop.on("pickcls", function(from, rest)
     if P.late then P.late(go, "picked up (spawned)") else pcall(go) end
 end)
 table.insert(P.NewGameReset, function() P.TeamHands = {} end)
+table.insert(P.NewGameReset, function() P.VhsDone = {} end)
 
 -- picked up level objects: shared once they are really gone / hidden (see on_local_call "Pick Up Object")
 table.insert(P.Handlers.tick, function(dt, have)
@@ -2573,3 +2619,64 @@ table.insert(P.Handlers.tick, function(dt, have)
     end
 end)
 table.insert(P.Handlers.unload, function() P.PickCheck = {} end)
+
+------------------------------------------------------------------ Chapter 1 two-hand scanners
+-- The red + blue scanner pair (ExtendoTwoHandActivation_C: Storage where the red hand is, the Hub) completes when
+-- both hands charge it. Nothing of that goes through a hookable function, so its "HandpadCompleted?" is watched:
+-- done here -> the other games complete the same pad (both hands primed, charge full, the pad's own charge
+-- event: it opens what it opens). Kept as team state: a pad loaded later (area streamed in, respawn, a late
+-- joiner) is completed when it shows up.
+P.TwoHand = { CLASS = "ExtendoTwoHandActivation_C", team = {}, seen = {}, remote = {}, at = 0, EVERY = 0.5 }
+function P.TwoHand.complete(a, path)
+    P.TwoHand.remote[path] = true
+    P.late(function()
+        local a2 = find_actor(path)
+        if not a2 or try(function() return a2["HandpadCompleted?"] end) == true then return end
+        if try(function() return a2["isPowered?"] end) == false then pcall(function() a2["Power Up!"](a2) end) end
+        local ok = pcall(function()
+            a2["RightHandPadPrimed?"] = true
+            a2["LeftHandPadPrimed?"] = true
+            a2["ChargeCurrent"] = a2["ChargeMax"]
+            a2["Calculate Charge Event"](a2)
+        end)
+        log("friend's two-hand scanner: completed %s here (%s)", path:match("([^.]+)$") or path, tostring(ok))
+    end, "two-hand scanner")
+end
+Coop.on("hand2", function(from, path)
+    if P.CHAPTER ~= 1 or not SYNC_ACT then return end
+    path = tostring(path or "")
+    if not path:find(P.TwoHand.CLASS:gsub("_C$", ""), 1, true) or #path > 300 then return end
+    if P.old_progress(from) then return end
+    P.TwoHand.team[path] = true
+    P.TwoHand.at = 0                                   -- look right away
+end)
+table.insert(P.Handlers.join, function(id)
+    if P.CHAPTER ~= 1 or not SYNC_ACT then return end
+    for path in pairs(P.TwoHand.team) do Coop.send_to(id, "hand2", path) end
+end)
+table.insert(P.Handlers.tick, function(dt, have)
+    if P.CHAPTER ~= 1 or not SYNC_ACT or not have or P.quiet() then return end
+    local T = P.TwoHand
+    local now = P.game_time()
+    if now - T.at < T.EVERY then return end
+    T.at = now
+    for _, a in ipairs(try(FindAllOf, T.CLASS) or {}) do
+        local path = valid(a) and actor_path(a)
+        if path then
+            local done = try(function() return a["HandpadCompleted?"] end) == true
+            if done and not T.seen[path] and not T.remote[path] and not T.team[path] and Coop.active() then
+                T.team[path] = true
+                Coop.send_event("hand2", path)
+                log("two-hand scanner %s completed: shared", path:match("([^.]+)$") or path)
+            elseif not done and T.team[path] and not T.remote[path] then
+                T.complete(a, path)
+            end
+            T.seen[path] = done or nil
+        end
+    end
+end)
+-- a reloaded pad starts open again: its new copy may need completing again (remote cleared), its state re-read
+function P.TwoHand.reset() P.TwoHand.seen, P.TwoHand.remote = {}, {} end
+table.insert(P.Handlers.unload, P.TwoHand.reset)
+table.insert(P.Handlers.restart, P.TwoHand.reset)
+table.insert(P.NewGameReset, function() P.TwoHand.team = {}; P.TwoHand.reset() end)

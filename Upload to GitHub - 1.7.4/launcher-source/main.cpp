@@ -168,6 +168,16 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"You can only invite friends.", L"Du kannst nur Freunde einladen." },
         { L" invites you", L" lädt dich ein" },
         { L"Join now", L"Jetzt beitreten" },
+        { L"On", L"An" },
+        { L"FRIEND'S SETTINGS", L"EINSTELLUNGEN DES FREUNDES" },
+        { L" plays with other settings", L" spielt mit anderen Einstellungen" },
+        { L"Different settings make different games (items, doors, enemies). Take theirs? The game restarts and you join the same room again.", L"Unterschiedliche Einstellungen ergeben unterschiedliche Spiele (Items, Türen, Gegner). Die Einstellungen des Freundes übernehmen? Das Spiel startet neu und du kommst wieder in denselben Raum." },
+        { L"Take them & restart", L"Übernehmen & neu starten" },
+        { L"Keep mine", L"Meine behalten" },
+        { L"friend: ", L"Freund: " },
+        { L"you: ", L"du: " },
+        { L"Taking the settings - the game restarts...", L"Einstellungen übernommen - das Spiel startet neu..." },
+        { L"The game didn't close - close it, then press PLAY.", L"Das Spiel wurde nicht geschlossen - schließe es und drücke SPIELEN." },
         { L"Dismiss", L"Ablehnen" },
         { L"Invite", L"Einladen" },
         { L"Pick Create Game first - then invite.", L"Wähle zuerst Spiel erstellen - dann einladen." },
@@ -995,7 +1005,16 @@ static void maybe_report_crashes() {
         if (ci.time <= last || now_ft() - ci.time > REPORT_MAX_AGE) continue;
         ini_set(L"Launcher", key.c_str(), std::to_wstring(ci.time));        // once, even if sending fails
         std::wstring ver = inst_ver(ch).empty() ? std::wstring(MOD_VERSION) : inst_ver(ch);
-        std::wstring os = system_summary();
+        // when it crashed and when it is sent: a report waits until the launcher is opened again (could be days)
+        auto ft_utc = [](ULONGLONG t) {
+            FILETIME f = { (DWORD)(t & 0xFFFFFFFF), (DWORD)(t >> 32) };
+            SYSTEMTIME st = {};
+            FileTimeToSystemTime(&f, &st);
+            wchar_t b[32];
+            swprintf(b, 32, L"%02u.%02u. %02u:%02u", st.wDay, st.wMonth, st.wHour, st.wMinute);
+            return std::wstring(b);
+        };
+        std::wstring os = L"Crashed " + ft_utc(ci.time) + L" UTC, sent " + ft_utc(now_ft()) + L" UTC\n" + system_summary();
         std::thread([w = g_wnd, ch, ci, ver, os] {
             std::string err;
             bool ok = send_crash_report(ch, ci, ver, os, err);
@@ -2270,6 +2289,90 @@ static void save_window_size() {
     ini_set(L"Launcher", L"WinH", std::to_wstring((int)((r.bottom - r.top) / g_dpi)));
     ini_set(L"Launcher", L"WinMax", IsZoomed(g_wnd) ? L"1" : L"0");
 }
+// ------------------------------------------------------------------ a friend's settings
+// The mod writes <mod>\settings_friend.txt when a friend in the room plays with other switches (speedrun, harder
+// enemies, shared items...): "name=<friend>" + "<switch>=true|false" for each one that differs. The launcher
+// offers to take them; then the game is closed and started again (same room), with the friend's switches.
+struct SetOffer { int ch = -1; std::wstring name; std::vector<std::pair<std::wstring, bool>> keys; std::string raw; };
+static SetOffer g_offer;
+static void launch_now(int idx);
+static std::string g_offer_dismissed;
+static int g_restart_ch = -1;
+static ULONGLONG g_restart_t0 = 0;
+static void kill_game(const Chapter& c) {
+    if (c.shipping.empty()) return;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W pe = { sizeof(pe) };
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        if (_wcsicmp(pe.szExeFile, c.shipping.c_str()) != 0) continue;
+        HANDLE ph = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+        if (ph) { TerminateProcess(ph, 0); CloseHandle(ph); }
+    }
+    CloseHandle(snap);
+}
+static const SyncOpt* sync_opt(const Chapter& c, const std::wstring& id) {
+    for (auto& o : c.sync) if (id == o.id) return &o;
+    return nullptr;
+}
+static void poll_settings_offer() {
+    SetOffer o;
+    for (size_t i = 0; i < g_ch.size() && i < 8; i++) {
+        if (!g_running[i]) continue;
+        std::string s;
+        if (!read_file(mod_dir(g_ch[i]) + L"\\settings_friend.txt", s) || s.empty() || s.size() > 4096) continue;
+        o.ch = (int)i; o.raw = s;
+        size_t p = 0;
+        while (p < s.size()) {
+            size_t e = s.find('\n', p);
+            if (e == std::string::npos) e = s.size();
+            std::string line = s.substr(p, e - p);
+            p = e + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::wstring k = wide(line.substr(0, eq)), v = wide(line.substr(eq + 1));
+            if (k == L"name") o.name = v.substr(0, 32);
+            else if ((v == L"true" || v == L"false") && sync_opt(g_ch[i], k)) o.keys.push_back({ k, v == L"true" });
+        }
+        if (o.keys.empty()) o = SetOffer();
+        break;
+    }
+    bool fresh = o.raw != g_offer.raw && !o.raw.empty() && o.raw != g_offer_dismissed;
+    bool changed = o.raw != g_offer.raw;
+    g_offer = o;
+    if (fresh) {
+        FLASHWINFO fw = { sizeof(fw), g_wnd, FLASHW_TRAY | FLASHW_TIMERNOFG, 5, 0 };
+        FlashWindowEx(&fw);
+    }
+    if (changed) InvalidateRect(g_wnd, nullptr, FALSE);
+}
+static bool offer_open() { return g_offer.ch >= 0 && !g_offer.raw.empty() && g_offer.raw != g_offer_dismissed && g_restart_ch < 0; }
+static void take_offer() {
+    if (g_offer.ch < 0 || g_offer.ch >= (int)g_ch.size()) return;
+    Chapter& c = g_ch[g_offer.ch];
+    for (auto& kv : g_offer.keys) for (auto& o : c.sync) if (kv.first == o.id) o.value = kv.second;
+    chapter_save_settings(c);
+    DeleteFileW((mod_dir(c) + L"\\settings_friend.txt").c_str());
+    g_offer_dismissed = g_offer.raw;
+    g_restart_ch = g_offer.ch; g_restart_t0 = GetTickCount64();
+    kill_game(c);
+    toast(tr(L"Taking the settings - the game restarts..."));
+}
+// called from the poll timer: start the game again once the old one is gone
+static void restart_tick() {
+    if (g_restart_ch < 0) return;
+    ULONGLONG t = GetTickCount64() - g_restart_t0;
+    if (!game_running(g_ch[g_restart_ch]) && t > 2500) {
+        int idx = g_restart_ch;
+        g_restart_ch = -1;
+        launch_now(idx);
+    } else if (t > 20000) {
+        g_restart_ch = -1;
+        toast(tr(L"The game didn't close - close it, then press PLAY."));
+    }
+}
+
 static void draw_crash_consent(int w_px, int h_px) {
     if (!FEATURE_ONLINE || g_crashrep != -1) return;
     g_hits.push_back({ { 0, 0, w_px, h_px }, [] {}, false });          // the page below doesn't react meanwhile
@@ -2298,6 +2401,48 @@ static void draw_crash_consent(int w_px, int h_px) {
     text(R(x + 28, y + 86, CW - 56, 100), tr(L"When the game crashes, the launcher can send the error message, the end of the mod's log, the mod version and your Windows version to the PoppyCoop developers. User names in folder paths are removed. It helps us fix crashes. You can change this any time in the launcher settings."), F_SMALL, C_DIM);
     button(x + 28, y + CH - 64, 220, 40, tr(L"Yes, send them"), Btn::Primary, [] { set_crash_consent(true); });
     button(x + 260, y + CH - 64, 120, 40, tr(L"No"), Btn::Ghost, [] { set_crash_consent(false); });
+}
+
+static void draw_settings_offer(int w_px, int h_px) {
+    if (!offer_open() || (FEATURE_ONLINE && g_crashrep == -1)) return;
+    g_hits.push_back({ { 0, 0, w_px, h_px }, [] {}, false });
+    {   // dim the page behind the card
+        BITMAPINFO bi = {}; bi.bmiHeader = { sizeof(BITMAPINFOHEADER), 1, 1, 1, 32, BI_RGB };
+        void* bits = nullptr;
+        HBITMAP b = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (b && bits) {
+            *(DWORD*)bits = 0;
+            HDC m = CreateCompatibleDC(g_dc);
+            HGDIOBJ o = SelectObject(m, b);
+            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 150, 0 };
+            AlphaBlend(g_dc, 0, 0, w_px, h_px, m, 0, 0, 1, 1, bf);
+            SelectObject(m, o); DeleteDC(m);
+        }
+        if (b) DeleteObject(b);
+    }
+    const Chapter& c = g_ch[g_offer.ch];
+    int rows = (int)std::min<size_t>(g_offer.keys.size(), 8);
+    const int CW = 560, CH = 230 + rows * 26;
+    int lw = (int)(w_px / g_s), lh = (int)(h_px / g_s);
+    int x = std::max(MX, (lw - CW) / 2), y = std::max(60, (lh - CH) / 2 - 20);
+    RECT card = R(x, y, CW, CH);
+    fill(card, C_CARD2, 16);
+    frame(card, accent(), 16, 2);
+    text(R(x + 28, y + 22, CW - 56, 18), tr(L"FRIEND'S SETTINGS"), F_SMALL, acc_text(), DT_LEFT | DT_SINGLELINE);
+    text(R(x + 28, y + 42, CW - 56, 30), (g_offer.name.empty() ? L"?" : g_offer.name) + tr(L" plays with other settings"), F_BIG, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    text(R(x + 28, y + 80, CW - 56, 44), tr(L"Different settings make different games (items, doors, enemies). Take theirs? The game restarts and you join the same room again."), F_SMALL, C_DIM);
+    int ry = y + 130;
+    for (int i = 0; i < rows; i++) {
+        const auto& kv = g_offer.keys[i];
+        const SyncOpt* o = sync_opt(c, kv.first);
+        std::wstring label = o ? tr(o->label) : kv.first;
+        text(R(x + 28, ry, CW - 300, 22), label, F_BODY, C_TEXT, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        std::wstring val = tr(L"friend: ") + tr(kv.second ? L"On" : L"Off") + L"   " + tr(L"you: ") + tr(kv.second ? L"Off" : L"On");
+        text(R(x + CW - 270, ry, 242, 22), val, F_SMALL, kv.second ? C_OK : C_DIM, DT_RIGHT | DT_SINGLELINE);
+        ry += 26;
+    }
+    button(x + 28, y + CH - 62, 250, 40, tr(L"Take them & restart"), Btn::Primary, [] { take_offer(); });
+    button(x + 290, y + CH - 62, 150, 40, tr(L"Keep mine"), Btn::Ghost, [] { g_offer_dismissed = g_offer.raw; });
 }
 
 static void draw_title_bar(int w, int tb) {
@@ -2395,6 +2540,7 @@ static void paint(HDC wdc, int w, int h) {
         });
 
     draw_crash_consent(w, h - tb);
+    draw_settings_offer(w, h - tb);
     if (tb) draw_title_bar(w, tb);
     SetViewportOrgEx(dc, 0, 0, nullptr);
 
@@ -2804,6 +2950,8 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             }
             ULONGLONG nw = GetTickCount64();
             if (g_crash_check_at && nw > g_crash_check_at) { g_crash_check_at = 0; maybe_report_crashes(); }
+            poll_settings_offer();
+            restart_tick();
             // friends: status heartbeat + list every 60 s (only once the player has opened the friends page);
             // the list every 15 s while the page is open
             // (a game started / ended: say so right away, so friends see the room code at once)
