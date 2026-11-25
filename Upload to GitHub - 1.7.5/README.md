@@ -114,7 +114,7 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 ## Changelog
 
 ### 1.7.5
-- **Chapter 5 co-op (beta)** by MushyMeow: friends are animated figures in their colour, and levers, valves, breakers, hand scanners, buttons, doors, power, keys and story progress are shared, with popups when a friend uses something. Carried puzzle objects and chases aren't yet. The launcher installs the newer UE4SS that Chapter 5 needs by itself.
+- **Chapter 5 co-op (beta)** by MushyMeow: friends show up as figures in their colour, and levers, valves, breakers, hand scanners, buttons, doors, power, keys and story progress are shared, with popups when a friend uses something. Carried puzzle objects and chases aren't yet. The launcher installs the newer UE4SS that Chapter 5 needs by itself.
 - **Chapters 3-5:** friends show up as figures in their colour.
 - **Steadier long sessions:** fewer engine errors (each one costs memory and adds up to a crash), and loading an area causes a smaller hitch.
 - **Chapter 5 - fixed while testing:** friends were invisible (the own position couldn't be read in Chapter 5, so nothing was sent) - now you see each other as figures with names.
