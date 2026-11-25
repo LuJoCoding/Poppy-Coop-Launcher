@@ -7,8 +7,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download the latest **[`PoppyCoop_Launcher_1.7.5.zip`](Upload%20to%20GitHub%20-%201.7.5/PoppyCoop_Launcher_1.7.5.zip)**
-(folder `Upload to GitHub - 1.7.5`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
+Download the latest **[`PoppyCoop_Launcher_1.7.6.zip`](Upload%20to%20GitHub%20-%201.7.6/PoppyCoop_Launcher_1.7.6.zip)**
+(folder `Upload to GitHub - 1.7.6`, or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
 click **More info → Run anyway**. The same exe also runs on Linux / Steam Deck through Proton.
@@ -112,6 +112,14 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.6
+- **Chapters 3-5: fewer crashes when a level loads.** The mod no longer loads shapes for the friend figures while the game is still loading a level (in Unreal 5 that could end in a crash, seen in several Chapter 3 reports). Figures use shapes the game already has.
+- **Chapters 3-5: crash after a level change fixed.** The mod's update loop (used in chapters without their own player tick, e.g. Chapter 3) kept touching friend figures of the old level after a level change. It now notices the new level first and rebuilds the figures.
+- **Chapter 3: friend figures get their colour again** without an error every two seconds in the log (those errors could add up to a crash).
+- **Dark, flat lighting after the old performance mode is repaired automatically:** if you had performance mode on before 1.7.5, the game kept the lowered shadows, effects and foliage even after switching it off. The mod spots exactly that leftover once and puts them back to high. Graphics you set lower yourself in the game menu are left alone.
+- **Performance mode keeps your own graphics:** it remembers your values before lowering them and puts exactly those back when you switch it off (before, it could even raise settings you had lower on purpose, e.g. shadows at 0 for speedruns, which made the picture dark). It now only lowers, never raises.
+- **Chapter 1: crouching friends no longer float** - their figure was lifted about 30 cm when they sneaked; now it squats on the floor.
 
 ### 1.7.5
 - **Chapter 5 co-op (beta)** by MushyMeow: friends show up as figures in their colour, and levers, valves, breakers, hand scanners, buttons, doors, power, keys and story progress are shared, with popups when a friend uses something. Carried puzzle objects and chases aren't yet. The launcher installs the newer UE4SS that Chapter 5 needs by itself.

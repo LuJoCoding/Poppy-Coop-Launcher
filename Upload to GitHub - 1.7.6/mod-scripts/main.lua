@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.7.5"   -- 1.7.5: Chapter 5 world sync (MushyMeow: levers, valves, scanners, doors, story progress), friend figures + colours in CH3-5, call param-count check, census speed-up; 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.7.6"   -- 1.7.5: Chapter 5 world sync (MushyMeow: levers, valves, scanners, doors, story progress), friend figures + colours in CH3-5, call param-count check, census speed-up; 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -856,7 +856,10 @@ local function load_async(path)
     -- Chapter 1: never. A synchronous LoadAsset run from UE4SS's ExecuteInGameThread queue (inside a
     -- ProcessEvent) right after a level load is the prime suspect for the game freezes (all threads
     -- waiting); Chapter 1 has every mesh the figures use loaded anyway once the player has the GrabPack.
-    if CHAPTER == 1 then return end
+    -- Chapters 3-5 (Unreal 5 too): the same load during a level load ends in "Flushing async loading while
+    -- creating, serializing or postloading an object is not permitted" (crash reports 1.7.4, Chapter 3).
+    -- Only Chapter 2 (Unreal 4) loads; the others use what is already loaded (see resolve_assets).
+    if CHAPTER ~= 2 then return end
     if not path or AssetRequested[path] or not LoadAsset or not ExecuteInGameThread then return end
     AssetRequested[path] = true
     pcall(ExecuteInGameThread, function() pcall(LoadAsset, path) end)
@@ -875,7 +878,10 @@ local function resolve_assets()
     Assets.body = find_asset("/Engine/BasicShapes/Cylinder.Cylinder")
     Assets.head = find_asset("/Engine/BasicShapes/Sphere.Sphere")
     Assets.cube = find_asset("/Engine/BasicShapes/Cube.Cube")
-    if not Assets.body and Game.pawn then
+    -- nothing is loaded on demand in Chapters 3-5: a missing cylinder becomes a block body
+    if not valid(Assets.body) and CHAPTER >= 3 then Assets.body = valid(Assets.cube) and Assets.cube or Assets.head end
+    if not valid(Assets.cube) and CHAPTER >= 3 then Assets.cube = Assets.body end
+    if not valid(Assets.body) and Game.pawn then
         -- fall back to borrowing the GrabPack hand mesh from our own player
         local m = try(function() return Game.pawn["Right Gun Mesh"].StaticMesh end)
         if valid(m) then Assets.body = m end
@@ -988,6 +994,11 @@ local function color_cache_write(base)
 end
 -- the colour parameter of the base material (e.g. "Color" / "Base Color"), never an emissive one
 local function find_param(mat)
+    -- only material instances have the parameter list: on a plain Material (Chapters 3+ fall back to the
+    -- engine's BasicShapeMaterial) ForEach raises an engine error on every try, and engine errors leak
+    -- Lua C stack until the game crashes (Chapter 3 test, 1.7.6)
+    local cls = try(function() return mat:GetClass():GetFName():ToString() end) or ""
+    if not cls:find("MaterialInstance", 1, true) then return nil end
     local found
     pcall(function()
         mat.VectorParameterValues:ForEach(function(_, e)
@@ -1854,7 +1865,7 @@ local function g1_update(p, st, c, crouch)
         g1_show(g.bpk, has.L or has.R)
     end
     local ang = math.rad((p.aim or 0) + (p.air or 0) * 12)        -- arms follow the look pitch
-    local dz = crouch and 3 or 0        -- (matches the mannequin: upper body -30, whole figure +33 when crouched)
+    local dz = crouch and -30 or 0      -- (matches the mannequin: upper body 30 cm lower when crouched)
     local function aimed(x, z)                                    -- rotate around the shoulder (z = 32)
         local dx, dzz = x, z - 32
         return dx * math.cos(ang) - dzz * math.sin(ang), 32 + dx * math.sin(ang) + dzz * math.cos(ang)
@@ -2001,9 +2012,9 @@ local function m1_update(p, st, c, crouch, dead, swing, bob, amount)
     if key == p.m1key then return false end
     p.m1key = key
     local cy, sy = math.cos(math.rad(c.yaw)), math.sin(math.rad(c.yaw))
-    -- crouched, the game's capsule centre sits ~33 cm lower (55 instead of 88 above the feet): the figure is
-    -- built for standing, so it is lifted by that much (its legs were in the floor)
-    local base = (crouch and not dead) and 33 or 0
+    -- the sender already sends a "standing capsule centre" height (feet always 88 below), also when crouched,
+    -- so the figure needs no extra lift (1.7.0 lifted it by 33 cm - crouching friends floated)
+    local base = 0
     local function T(x, z)                                       -- dead: lying on the back
         if dead then return -(z + 88), -80 + x * 0.3 end
         return x, z + base
@@ -3108,6 +3119,11 @@ local function hook_tick()
                     busy = true
                     ExecuteInGameThread(function()
                         busy = false
+                        -- the same world check as the player tick: after a level change the friend figures
+                        -- and cached objects belong to the old (freed) world - drop them before tick touches
+                        -- them (Chapter 3 crash right after a level load, 1.7.6 test)
+                        if Game.world_check and not Game.world_check() then return end
+                        if not SafeUE.world() then return end   -- no world yet (map is loading)
                         local now = realtime()
                         local dt = now - last
                         last = now
@@ -3189,6 +3205,7 @@ Game.world_check = function()
         world_unloading(); Game.loading = false; Game.world_addr = wa
         return false
     end
+    if wa and not Game.world_addr then Game.world_addr = wa end
     return true
 end
 -- NOTE: RegisterLoadMapPreHook crashes this game on startup with UE4SS 3.0.1, so it is NOT used.
@@ -3210,29 +3227,57 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
         end)
     end
     -- launcher "Performance mode" (config low_gfx=true): lower shadows / effects / post processing
-    -- The game saves these values in GameUserSettings.ini, so they outlive the switch. A marker file remembers
-    -- that we lowered them; once the switch is off again they go back to high (3) and are saved once.
+    -- The game saves these values in GameUserSettings.ini, so they outlive the switch. A marker file holds the
+    -- player's values from before; once the switch is off again they are put back and saved once.
+    -- Before 1.7.5 there was no marker, so players who had switched it off kept the low values (dark, flat
+    -- light). Once per game folder the mod looks for exactly that leftover - shadows, effects and foliage at 1
+    -- while textures/view distance/shading are higher (the game's own presets move all of them together) -
+    -- and repairs it the same way.
     local low = Config.low_gfx == true or Config.low_gfx == "true"
-    local mark = MOD_DIR .. "\\low_gfx_applied.txt"
-    local marked = (function() local f = io.open(mark, "r"); if f then f:close(); return true end return false end)()
-    if low or marked then
+    local function exists(fn) local f = io.open(fn, "r"); if f then f:close(); return true end return false end
+    local mark, checked = MOD_DIR .. "\\low_gfx_applied.txt", MOD_DIR .. "\\gfx_checked.txt"
+    local marked = exists(mark)
+    local check_old = not low and not marked and not exists(checked)
+    if low or marked or check_old then
         pcall(function()
             local pc = SafeUE.player_controller()
             local ks = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
             if not (pc and ks) then return end
-            local q = low and 1 or 3
-            for _, g in ipairs({ "Shadow", "Effects", "PostProcess", "Foliage" }) do
-                ks:ExecuteConsoleCommand(pc:GetWorld(), ("sg.%sQuality %d"):format(g, q), pc)
+            if check_old then
+                local f = io.open(checked, "w"); if f then f:write("1"); f:close() end
+                local function sg(g) return tonumber(ks:GetConsoleVariableIntValue(("sg.%sQuality"):format(g))) or -1 end
+                local leftover = sg("Shadow") == 1 and sg("Effects") == 1 and sg("Foliage") == 1
+                    and (sg("Texture") >= 2 or sg("ViewDistance") >= 2 or sg("Shading") >= 2)
+                if not leftover then return end
+                log("graphics still lowered by an older performance mode: repairing")
             end
-            ks:ExecuteConsoleCommand(pc:GetWorld(), "r.MotionBlurQuality " .. (low and 0 or 4), pc)
+            local function sgv(g) return tonumber(ks:GetConsoleVariableIntValue(("sg.%sQuality"):format(g))) end
+            local function set(g, v) ks:ExecuteConsoleCommand(pc:GetWorld(), ("sg.%sQuality %d"):format(g, v), pc) end
+            local GROUPS = { "Shadow", "Effects", "PostProcess", "Foliage" }
             if low then
-                if not marked then local f = io.open(mark, "w"); if f then f:write("1"); f:close() end end
+                -- remember the player's own values first (some keep them even lower on purpose, e.g. shadows 0
+                -- for speedruns), and only ever lower: a value below 1 stays where it is
+                if not marked then
+                    local t = {}
+                    for _, g in ipairs(GROUPS) do t[#t + 1] = ("%s=%d"):format(g, sgv(g) or 3) end
+                    local f = io.open(mark, "w"); if f then f:write(table.concat(t, " ")); f:close() end
+                end
+                for _, g in ipairs(GROUPS) do if (sgv(g) or 3) > 1 then set(g, 1) end end
+                ks:ExecuteConsoleCommand(pc:GetWorld(), "r.MotionBlurQuality 0", pc)
                 return
             end
+            -- back to the remembered values (marker from 1.7.5 or the old-leftover repair: high = 3)
+            local saved = {}
+            if marked then
+                local f = io.open(mark, "r")
+                if f then for g, v in (f:read("*a") or ""):gmatch("(%a+)=(%d+)") do saved[g] = tonumber(v) end; f:close() end
+            end
+            for _, g in ipairs(GROUPS) do set(g, math.max(0, math.min(saved[g] or 3, 4))) end
+            ks:ExecuteConsoleCommand(pc:GetWorld(), "r.MotionBlurQuality 4", pc)
             local gus = FindFirstOf("GameUserSettings")
             if gus and gus:IsValid() and not gus:GetFullName():find("Default__", 1, true) then gus:SaveSettings() end
             os.remove(mark)
-            log("performance mode off: shadows/effects/post processing/foliage restored to high")
+            log("performance mode off: shadows/effects/post processing/foliage restored (%s)", next(saved) and "your own values" or "high")
         end)
     end
     if Game.dead and (Config.respawn_at_friend == true or Config.respawn_at_friend == "true") then Game.respawn_tp_at = game_time + 4 end
