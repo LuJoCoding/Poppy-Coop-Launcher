@@ -1110,27 +1110,28 @@ local function census_step()
     Census.want, Census.at = false, t
     local list = try(function() return FindAllOf("Actor") end) or {}
     local by, classes, seen_now = {}, {}, {}
-    for i = 1, #list do
-        local a = list[i]
-        pcall(function()
-            local ad = a:GetAddress()
-            local cn = CensusAddr[ad]
-            if not cn then
-                local cls = a:GetClass()
-                cn = cls:GetFName():ToString()
-                CensusAddr[ad] = cn
-                if CensusKind[cn] == nil then CensusKind[cn] = census_kind(cls) end
-            end
-            seen_now[ad] = cn
-            if not classes[cn] then classes[cn] = { cls = a:GetClass(), a = a } end   -- fresh: a level reload makes a new class
-            local w = CensusKind[cn]
-            if w then
-                local l = by[w]
-                if not l then l = {}; by[w] = l end
-                l[#l + 1] = a
-            end
-        end)
+    -- one function for all actors (a new closure per actor in a ~10,000 actor loop was a large part of the
+    -- census cost after a level load - seen: 385 ms in one frame)
+    local function one(a)
+        local ad = a:GetAddress()
+        local cn = CensusAddr[ad]
+        local cls
+        if not cn then
+            cls = a:GetClass()
+            cn = cls:GetFName():ToString()
+            CensusAddr[ad] = cn
+            if CensusKind[cn] == nil then CensusKind[cn] = census_kind(cls) end
+        end
+        seen_now[ad] = cn
+        if not classes[cn] then classes[cn] = { cls = cls or a:GetClass(), a = a } end   -- fresh: a level reload makes a new class
+        local w = CensusKind[cn]
+        if w then
+            local l = by[w]
+            if not l then l = {}; by[w] = l end
+            l[#l + 1] = a
+        end
     end
+    for i = 1, #list do pcall(one, list[i]) end
     CensusAddr = seen_now                -- forget actors that are gone (their address may be reused)
     Census.by, Census.classes, Census.gen, Census.at, Census.fresh = by, classes, Census.gen + 1, now(), true
     for _, f in ipairs(P.CensusDone) do pcall(f, classes) end

@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.7.4.zip`**
+Download **`PoppyCoop_Launcher_1.7.5.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,15 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.5
+- **Chapter 5 co-op (beta)** by MushyMeow: friends are animated figures in their colour, and levers, valves, breakers, hand scanners, buttons, doors, power, keys and story progress are shared, with popups when a friend uses something. Carried puzzle objects and chases aren't yet. The launcher installs the newer UE4SS that Chapter 5 needs by itself.
+- **Chapters 3-5:** friends show up as figures in their colour.
+- **Steadier long sessions:** fewer engine errors (each one costs memory and adds up to a crash), and loading an area causes a smaller hitch.
+- **Chapter 5 - fixed while testing:** friends were invisible (the own position couldn't be read in Chapter 5, so nothing was sent) - now you see each other as figures with names.
+- **Chapter 5 items:** picking up a key, note, tape or collectible gives it to everyone and removes it from the friends' world (before, keys stayed for the friend only - locked doors close again by themselves). Friends who join later get everything found so far.
+- **Launcher finds Chapters 3 and 5 by itself** in the new Steam layout (all chapters inside the "Poppy Playtime" folder).
+- **Performance mode no longer sticks:** it lowered shadows, effects, post processing and foliage, and the game saved those values, so the picture stayed dark and flat even after switching it off. Now switching it off puts them back to high the next time you play.
 
 ### 1.7.4
 - **Chapter 1 VHS tapes:** when a friend puts a tape into a recorder, it goes in for you too - the tape slides in and the film plays in both games (before, the tape only vanished from your inventory).

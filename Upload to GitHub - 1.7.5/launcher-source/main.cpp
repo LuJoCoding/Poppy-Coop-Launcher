@@ -358,7 +358,7 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"Shared monsters (experimental)", L"Gemeinsame Monster (experimentell)" },
         { L"Huggy, Mommy & co. chase the same player for all", L"Huggy, Mommy & Co. jagen bei allen denselben Spieler" },
         { L"Enemies get faster with every extra player", L"Gegner werden mit jedem weiteren Spieler schneller" },
-        { L"Lower shadows and effects for more fps on weak PCs", L"Weniger Schatten und Effekte für mehr fps auf schwachen PCs" },
+        { L"Lower shadows and effects for more fps on weak PCs (switching it off restores them)", L"Weniger Schatten und Effekte für mehr fps auf schwachen PCs (Ausschalten stellt sie wieder her)" },
         { L"Smoother on weaker PCs, less heat", L"Ruhiger auf schwächeren PCs, weniger Hitze" },
         { L"On-screen messages", L"Meldungen im Spiel" },
         { L"Joined / died / teleport messages", L"Beigetreten / gestorben / Teleport-Meldungen" },
@@ -389,7 +389,8 @@ static const std::unordered_map<std::wstring, std::wstring>& de_table() {
         { L"How the launcher looks, plus a few extras.", L"Wie der Launcher aussieht, plus ein paar Extras." },
         { L"Chapters 3 to 5 can be tried as experimental (Launcher settings). You can set up another chapter any time from the list on the left.", L"Kapitel 3 bis 5 kannst du experimentell testen (Launcher-Einstellungen). Ein anderes Kapitel kannst du jederzeit links in der Liste einrichten." },
         { L"Explore the abandoned toy factory together. Doors, power, puzzles, items, pullable objects and loaded areas are shared with everyone in your room.", L"Erkundet zusammen die verlassene Spielzeugfabrik. Türen, Strom, Rätsel, Gegenstände, ziehbare Objekte und geladene Bereiche werden mit allen im Raum geteilt." },
-        { L"Explore the Game Station together. Doors, keys and items, power, checkpoints, pullable objects and loaded areas are shared - and Musical Memory and Whack-a-Wuggy are played together.", L"Erkundet zusammen die Game Station. Türen, Schlüssel und Gegenstände, Strom, Hebel und ziehbare Objekte werden geteilt - Musical Memory und Whack-a-Wuggy spielt ihr zusammen." }
+        { L"Explore the Game Station together. Doors, keys and items, power, checkpoints, pullable objects and loaded areas are shared - and Musical Memory and Whack-a-Wuggy are played together.", L"Erkundet zusammen die Game Station. Türen, Schlüssel und Gegenstände, Strom, Hebel und ziehbare Objekte werden geteilt - Musical Memory und Whack-a-Wuggy spielt ihr zusammen." },
+        { L"Beta: you see each other, and levers, valves, hand scanners, doors, picked-up items and story progress are shared. Some puzzles and chases aren't yet.", L"Beta: ihr seht euch, und Hebel, Ventile, Handscanner, Türen, aufgehobene Gegenstände und Story-Fortschritt werden geteilt. Manche Rätsel und Verfolgungen noch nicht." }
     };
     return m;
 }
@@ -2589,7 +2590,7 @@ static void paint(HDC wdc, int w, int h) {
 // ------------------------------------------------------------------ install / play
 // writes UE4SS + the mod into the chapter's folder; w (may be null) gets progress messages
 static bool install_files(const Chapter& c, const Profile& p, HWND w) {
-    auto items = install_items();
+    auto items = install_items(c);
     size_t total = 0, done = 0;
     std::vector<std::pair<const void*, DWORD>> data;
     for (auto& it : items) {

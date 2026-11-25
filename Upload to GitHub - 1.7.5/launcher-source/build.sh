@@ -24,6 +24,15 @@ cat > build/launcher.rc <<RC
 112 10 "res/10_112.bin"
 113 10 "res/10_113.bin"
 114 10 "$SCRIPTS/coop_extra.lua"
+115 10 "$SCRIPTS/coop_ch5.lua"
+116 10 "res/10_116.bin"
+117 10 "res/10_117.bin"
+118 10 "res/10_118.bin"
+119 10 "res/10_119.bin"
+120 10 "res/10_120.bin"
+121 10 "res/10_121.bin"
+122 10 "res/10_122.bin"
+123 10 "res/10_123.bin"
 RC
 x86_64-w64-mingw32-windres -I. build/launcher.rc -O coff -o build/launcher.res
 x86_64-w64-mingw32-g++ -std=c++17 -O2 -municode -mwindows -static -s -Wall -Wno-unused-function \

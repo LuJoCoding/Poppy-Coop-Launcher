@@ -139,8 +139,12 @@ local function actor_path(obj)
         if (P.InHook or 0) > 0 then return p end
         local ok, cp = pcall(function()
             if P.quiet() or not obj:IsValid() then return nil end
-            local parent, comp = obj:GetParentActor(), obj:GetParentComponent()
-            if parent and parent:IsValid() and comp and comp:IsValid() then
+            -- the ParentComponent property, not GetParentActor()/GetParentComponent(): calling those raised
+            -- "member function but the UObject instance is nullptr" engine errors (each one leaks memory)
+            local comp = obj.ParentComponent
+            if not (comp and comp:IsValid()) then return nil end
+            local parent = comp:GetOwner()
+            if parent and parent:IsValid() then
                 local pp, cn = fullpath(parent), comp:GetFName():ToString()
                 if pp and cn and not cn:find("%s") then return pp .. "#" .. cn end
             end
@@ -284,6 +288,7 @@ end
 -- find an object by path; assets (not level actors) are loaded if needed
 local function resolve_object(path)
     if path:find("#", 1, true) then return find_actor(path) end
+    if path:sub(1, 1) ~= "/" then return nil end         -- not a long path: StaticFindObject would raise an engine error
     local o = try(StaticFindObject, path)
     if valid(o) then return o end
     -- not loaded: ask the game thread to load it (never call LoadAsset from a hook - engine error)
@@ -303,6 +308,7 @@ decode_value = function(tag, val)
     elseif tag == "0" then return true, nil
     elseif tag == "a" then return true, { __array = true }
     elseif tag == "o" then
+        if val:sub(1, 1) ~= "/" and not val:find("#", 1, true) then return false, "unusable object name " .. val end
         local o = resolve_object(val)
         if not o then return false, "object not loaded: " .. val end
         return true, o
@@ -499,12 +505,46 @@ local function patch_struct_entry(obj, fields)
     return patched
 end
 
+-- how many parameters (without the return value) a UFunction really takes; nil = unknown. Cached per
+-- class + function. A call with the wrong count is an engine error, and every engine error leaks memory in
+-- UE4SS 3.0.1 (seen: "UFunction expected 1 parameters, received 0" when a checkpoint was replayed).
+local call_with   -- (defined in this block: coop_world.lua is at Lua's 200-locals limit, block locals don't count after it)
+do
+local ParamCount = {}
+local CPF_PARM, CPF_RETURN = 0x80, 0x400
+local function param_count(obj, fnname)
+    local cls = try(function() return obj:GetClass():GetFName():ToString() end) or "?"
+    local key = cls .. ":" .. fnname
+    local c = ParamCount[key]
+    if c ~= nil then return c or nil end
+    local n
+    local ok = pcall(function()
+        local f = obj[fnname]
+        local k = 0
+        f:ForEachProperty(function(prop)
+            local flags = prop:GetPropertyFlags()
+            if (flags & CPF_PARM) ~= 0 and (flags & CPF_RETURN) == 0 then k = k + 1 end
+        end)
+        n = k
+    end)
+    ParamCount[key] = ok and n or false
+    return ok and n or nil
+end
+
 -- call a UFunction by name on obj with encoded args. Returns "ok", "later" (target not loaded) or "skip".
-local function call_with(obj, fnname, argstr)
+call_with = function(obj, fnname, argstr)
     local args, n = decode_args(argstr)
     if not args then
         trace("  cannot decode args (%s)", tostring(n))
         return tostring(n):find("not loaded", 1, true) and "later" or "skip"
+    end
+    -- (1.7.5: off. UE4SS 3.0.1 - Chapters 1-4 - can't list a UFunction's parameters: ForEachProperty raises
+    -- "UObject instance is nullptr", which aborts the whole replay even inside pcall - nothing got applied.
+    -- Chapter 5 has its own sync, coop_ch5.lua, so this check never had a chapter where it works.)
+    local want = P.PARAM_CHECK and param_count(obj, fnname)
+    if want and want ~= n then
+        trace("  skip %s: it takes %d parameter(s), the event has %d", fnname, want, n)
+        return "skip"
     end
     -- the count always matches: hooks receive NumParms minus the return value, which is exactly what
     -- UE4SS expects when calling (UFunction __call), so we replay with the captured count.
@@ -527,6 +567,7 @@ local function call_with(obj, fnname, argstr)
     if not ok then trace("  call %s failed: %s", fnname, tostring(err)) end
     return "ok"
 end
+end   -- do (call_with)
 
 -- Chapter 2 doors (DoorBP + its DoorChildBP leaves): another player opened it -> swing it open here.
 -- "Force Door Open" on every leaf is idempotent (also fine on an already open door / after a reload),
@@ -1465,7 +1506,8 @@ local function hook_class(cls, trace_everything)
         local hp = cname .. ":" .. fname
         if HookedPath[hp] then return end
         HookedPath[hp] = true
-        local flags = try(function() return fns[fname]:GetFunctionFlags() end) or 0
+        local flags = try(function() return fns[fname]:GetFunctionFlags() end)
+        if not flags or flags == 0 then HookedPath[hp] = nil; return end          -- class going away: try again later
         if (flags & 0x00100000) ~= 0 or (flags & 0x00000400) ~= 0 then return end   -- delegate / native: not hookable safely
         local ok, err = pcall(RegisterHook, cname .. ":" .. fname, function(ctx, ...)
             -- inside a game call: actor_path must not call engine functions (see actor_path)

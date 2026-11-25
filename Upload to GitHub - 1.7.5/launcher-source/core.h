@@ -34,7 +34,9 @@ static const wchar_t* RELAY_URL = L"wss://poppycoop-relay.poppycoopnet.workers.d
 enum {
     RES_DWMAPI = 101, RES_UE4SS = 102, RES_UE4SS_INI = 103, RES_MODS_TXT = 104, RES_CONSOLE = 105,
     RES_KEYBINDS = 106, RES_JSB = 107, RES_UEHELPERS = 108, RES_NET = 109, RES_MAIN = 110, RES_WORLD = 111,
-    RES_COLORS = 112, RES_ENABLED = 113, RES_EXTRA = 114
+    RES_COLORS = 112, RES_ENABLED = 113, RES_EXTRA = 114,
+    // Chapter 5 (Unreal 5.6, MushyMeow): its own script, a newer UE4SS + proxy + settings, and AOB signatures
+    RES_CH5 = 115, RES_UE4SS_56 = 116, RES_UE4SS_INI_56 = 117, RES_DWMAPI_56 = 118, RES_SIG_FIRST = 119
 };
 
 static bool load_res(int id, const void** data, DWORD* size) {
@@ -187,9 +189,9 @@ static std::vector<KeyBind> default_keys() {
 static std::vector<SyncOpt> default_sync() {
     return {
         { L"speedrun", L"Speedrun mode", L"Only what a run needs (doors, inventory, hands), max fps", 1, false },
-        { L"sync_activations", L"Doors, switches & puzzles", L"Doors, power, levers, puzzle parts", 3, true },
+        { L"sync_activations", L"Doors, switches & puzzles", L"Doors, power, levers, puzzle parts", 19, true },
         { L"sync_destroy", L"Picked-up items", L"Gone for everyone once picked up", 3, true },
-        { L"sync_inventory", L"Shared inventory", L"One team inventory for keys & items", 3, true },
+        { L"sync_inventory", L"Shared inventory", L"One team inventory for keys & items", 19, true },
         { L"sync_hands", L"Shared GrabPack hands", L"A new hand goes to everyone", 3, true },
         { L"sync_physics", L"Pullable objects", L"Boxes, barrels, chairs move for all", 3, true },
         { L"bg_levels", L"Keep friends' areas loaded", L"Off = safer: their enemies can't reach you", 3, false },
@@ -198,11 +200,11 @@ static std::vector<SyncOpt> default_sync() {
         { L"respawn_at_friend", L"Respawn at a friend", L"After dying you are teleported to a friend", 3, false },
         { L"boost", L"Solid friends", L"You can't walk through friends and can stand on their head", 2, true },
         { L"fps60", L"Limit to 60 fps", L"Smoother on weaker PCs, less heat", 31, false },
-        { L"low_gfx", L"Performance mode", L"Lower shadows and effects for more fps on weak PCs", 31, false },
+        { L"low_gfx", L"Performance mode", L"Lower shadows and effects for more fps on weak PCs (switching it off restores them)", 31, false },
         { L"hard_mode", L"Harder enemies", L"Enemies get faster with every extra player", 3, false },
         { L"sync_huggy", L"Shared monsters (experimental)", L"Huggy, Mommy & co. chase the same player for all", 3, false },
         { L"popups", L"On-screen messages", L"Joined / died / teleport messages", 31, true },
-        { L"exp_world", L"Try world sync", L"Doors, items, puzzles - may not work or crash", 28, false },
+        { L"exp_world", L"Try world sync", L"Doors, items, puzzles - may not work or crash", 12, false },
     };
 }
 
@@ -220,7 +222,8 @@ static void chapters_init() {
     static const wchar_t* EXP_BLURB = L"Experimental: you see each other, can teleport, ping and chat. Doors, puzzles and items are NOT shared yet, and the game may crash.";
     g_ch.push_back({ 3, L"Deep Sleep", nullptr, EXP_BLURB, L"", L"", L"", L"Poppy Playtime Chapter 3", L"2555190", L"GameDir3", false, true });
     g_ch.push_back({ 4, L"Safe Haven", nullptr, EXP_BLURB, L"", L"", L"", L"Poppy Playtime Chapter 4", L"3008670", L"GameDir4", false, true });
-    g_ch.push_back({ 5, L"Broken Things", nullptr, EXP_BLURB, L"", L"", L"", L"Poppy Playtime Chapter 5", L"", L"GameDir5", false, true });
+    g_ch.push_back({ 5, L"Broken Things", L"BETA",
+        L"Beta: you see each other, and levers, valves, hand scanners, doors, picked-up items and story progress are shared. Some puzzles and chases aren't yet.", L"", L"", L"", L"Poppy Playtime Chapter 5", L"", L"GameDir5", false, true });
 }
 
 static bool playable(const Chapter& c) { return c.badge != nullptr || (c.experimental && g_experimental); }
@@ -394,8 +397,15 @@ static Detect detect_game(const Chapter& c) {
         cands.push_back({ r + L"\\steamapps\\content\\app_" + c.appid + L"\\" + depot, L"Steam download folder (downpatch)" });
         cands.push_back({ r + L"\\ubuntu12_32\\steamapps\\content\\app_" + c.appid + L"\\" + depot, L"Steam download folder (downpatch)" });
     }
+    // Since the Poppy Playtime launcher update every chapter can also be inside the one "Poppy Playtime" app folder
+    // (seen: Poppy Playtime\Chapter5\ch5_pro, Poppy Playtime\PoppyPlaytime_Chapter3\Playtime_Chapter3)
+    std::vector<std::wstring> inside;
+    if (c.num == 3) inside = { L"PoppyPlaytime_Chapter3", L"Chapter3" };
+    if (c.num == 4) inside = { L"PoppyPlaytime_Chapter4", L"Chapter4" };
+    if (c.num == 5) inside = { L"Chapter5", L"PoppyPlaytime_Chapter5" };
     for (auto& l : libs) {
         cands.push_back({ l + L"\\steamapps\\common\\" + c.steam_folder, L"Steam library" });
+        for (auto& sub : inside) cands.push_back({ l + L"\\steamapps\\common\\Poppy Playtime\\" + sub, L"Steam library" });
         if (*c.appid) cands.push_back({ l + L"\\steamapps\\content\\app_" + c.appid + L"\\" + depot, L"Steam download folder (downpatch)" });
     }
     for (auto& cand : cands) {
@@ -462,11 +472,12 @@ static std::wstring installed_version(const Chapter& c) {
 static bool up_to_date(const Chapter& c) { return installed_version(c) == MOD_VERSION; }
 
 struct InstallItem { std::wstring rel; int res; bool keep_existing; };
-static std::vector<InstallItem> install_items() {
-    return {
-        { L"ue4ss\\UE4SS.dll", RES_UE4SS, false },
-        { L"dwmapi.dll", RES_DWMAPI, false },
-        { L"ue4ss\\UE4SS-settings.ini", RES_UE4SS_INI, false },
+static std::vector<InstallItem> install_items(const Chapter& c) {
+    bool ue56 = c.num == 5;       // Chapter 5 needs a newer UE4SS than Chapters 1-4
+    std::vector<InstallItem> v = {
+        { L"ue4ss\\UE4SS.dll", ue56 ? RES_UE4SS_56 : RES_UE4SS, false },
+        { L"dwmapi.dll", ue56 ? RES_DWMAPI_56 : RES_DWMAPI, false },
+        { L"ue4ss\\UE4SS-settings.ini", ue56 ? RES_UE4SS_INI_56 : RES_UE4SS_INI, false },
         { L"ue4ss\\Mods\\mods.txt", RES_MODS_TXT, true },            // other mods the player set up stay as they are
         { L"ue4ss\\Mods\\ConsoleEnablerMod\\Scripts\\main.lua", RES_CONSOLE, true },
         { L"ue4ss\\Mods\\Keybinds\\Scripts\\main.lua", RES_KEYBINDS, true },
@@ -476,9 +487,17 @@ static std::vector<InstallItem> install_items() {
         { L"ue4ss\\Mods\\PoppyCoop\\Scripts\\main.lua", RES_MAIN, false },
         { L"ue4ss\\Mods\\PoppyCoop\\Scripts\\coop_world.lua", RES_WORLD, false },
         { L"ue4ss\\Mods\\PoppyCoop\\Scripts\\coop_extra.lua", RES_EXTRA, false },
+        { L"ue4ss\\Mods\\PoppyCoop\\Scripts\\coop_ch5.lua", RES_CH5, false },      // (does nothing outside Chapter 5)
         { L"ue4ss\\Mods\\PoppyCoop\\colors.txt", RES_COLORS, false },
         { L"ue4ss\\Mods\\PoppyCoop\\enabled.txt", RES_ENABLED, false },
     };
+    if (ue56) {
+        // UE4SS can't find these engine functions in Chapter 5 by itself (same order as the resources 119-123;
+        // the "_" one is a spare FText pattern UE4SS ignores)
+        static const wchar_t* SIGS[] = { L"FText_Constructor", L"GNatives", L"GUObjectArray", L"StaticConstructObject", L"_FText_Constructor" };
+        for (int i = 0; i < 5; i++) v.push_back({ std::wstring(L"ue4ss\\UE4SS_Signatures\\") + SIGS[i] + L".lua", RES_SIG_FIRST + i, false });
+    }
+    return v;
 }
 
 // ------------------------------------------------------------------ mod config files

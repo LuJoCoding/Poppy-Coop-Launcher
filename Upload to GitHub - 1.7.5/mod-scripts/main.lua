@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.7.4"   -- 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.7.5"   -- 1.7.5: Chapter 5 world sync (MushyMeow: levers, valves, scanners, doors, story progress), friend figures + colours in CH3-5, call param-count check, census speed-up; 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -830,7 +830,17 @@ local function local_state()
     end
     -- trailing token = body colour picked in the launcher (older versions simply ignore it)
     local colour = tostring(Config.color or "yellow"):lower():match("^%a+$") or "yellow"
-    return ("%.1f %.1f %.1f %.1f %.1f %d %s %s"):format(loc.X, loc.Y, z, rot.Yaw, rot.Pitch, flags, Game.map, colour)
+    -- (1.7.5) Chapter 5 (UE 5.6): the control rotation read in the tick can come back without Yaw/Pitch -
+    -- the whole state line failed and friends never saw each other. Fall back to the pawn's rotation, then 0.
+    local yaw, pitch = tonumber(try(function() return rot.Yaw end)), tonumber(try(function() return rot.Pitch end))
+    if not yaw then
+        local ar = try(function() return pawn:K2_GetActorRotation() end)
+        yaw = tonumber(try(function() return ar.Yaw end)) or 0
+        pitch = pitch or tonumber(try(function() return ar.Pitch end))
+    end
+    pitch = pitch or 0
+    local lx, ly = tonumber(loc.X) or 0, tonumber(loc.Y) or 0
+    return ("%.1f %.1f %.1f %.1f %.1f %d %s %s"):format(lx, ly, tonumber(z) or 0, yaw, pitch, flags, Game.map, colour)
         .. hand_tokens(pawn, loc) .. extra_tokens()
 end
 
@@ -1031,8 +1041,14 @@ local function tint_base()
         end)
         if best then Tint.base = best end
     end
+    -- Chapters 3+ have none of the toy paints: the engine's own shape material (every game has it) with its
+    -- "Color" parameter gives every player colour exactly
+    if not valid(Tint.base) and CHAPTER >= 3 then
+        Tint.base = try(StaticFindObject, "/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")
+    end
     if valid(Tint.base) then
         Tint.param = find_param(Tint.base)
+        if not Tint.param and CHAPTER >= 3 then Tint.param = "Color" end   -- a Material (not an instance): no list to read
         local fn = try(function() return Tint.base:GetFullName() end)
         local path = fn and fn:match("^%S+%s+(%S+)$")
         Tint.base_path = path
@@ -1943,7 +1959,8 @@ local M1_PARTS = {   -- name, mesh ("s" sphere / "c" cylinder), thickness X, Y (
 }
 local M1_LEG, M1_UARM, M1_FARM = 39, 27, 25          -- thigh = shin length; upper arm; forearm
 local M1_GRIP = { 33, 30 }                           -- the launcher grip (x, z) the fists hold
-local function m1_enabled() return CHAPTER == 1 and valid(Assets.head) and valid(Assets.body) end
+-- Chapter 1 and every chapter without its own figure (3-5: built from engine shapes, which every game has)
+local function m1_enabled() return (CHAPTER == 1 or CHAPTER >= 3) and valid(Assets.head) and valid(Assets.body) end
 
 local function m1_spawn(p, st, key)
     p.m1 = {}
@@ -2961,7 +2978,12 @@ local function tick(dt)
     if send_accum >= 1 / Config.send_hz then
         send_accum = 0
         crumb("local_state")
-        local st = have and try(local_state) or nil
+        local st = nil
+        if have then
+            local ok, r = pcall(local_state)
+            if ok then st = r
+            elseif not Net.st_err then Net.st_err = true; log("own position can't be read: %s", tostring(r)) end
+        end
         -- don't resend identical state more than once a second
         if st and st == last_sent and game_time - last_sent_t < 1 then st = nil end
         if st then last_sent, last_sent_t = st, game_time end
@@ -3075,7 +3097,7 @@ local function hook_tick()
             -- another player blueprint: hook its own tick if it has one, else a ~60 Hz game-thread loop
             local pawn = try(function() local pc = SafeUE.player_controller(); return pc and pc.Pawn end)
             local cls = valid(pawn) and try(function() return pawn:GetClass():GetFullName() end) or ""
-            local path = cls:match("^%S+%s+(/Game/%S+)$")
+            local path = cls:match("^%S+%s+(/%S+)$")   -- /Game/... or a plugin (Chapter 5: /PoppyCore/...)
             local fn = path and try(StaticFindObject, path .. ":ReceiveTick")
             if valid(fn) then tick_fn = path .. ":ReceiveTick"
             else
@@ -3188,15 +3210,29 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
         end)
     end
     -- launcher "Performance mode" (config low_gfx=true): lower shadows / effects / post processing
-    if Config.low_gfx == true or Config.low_gfx == "true" then
+    -- The game saves these values in GameUserSettings.ini, so they outlive the switch. A marker file remembers
+    -- that we lowered them; once the switch is off again they go back to high (3) and are saved once.
+    local low = Config.low_gfx == true or Config.low_gfx == "true"
+    local mark = MOD_DIR .. "\\low_gfx_applied.txt"
+    local marked = (function() local f = io.open(mark, "r"); if f then f:close(); return true end return false end)()
+    if low or marked then
         pcall(function()
             local pc = SafeUE.player_controller()
             local ks = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
-            if pc and ks then
-                for _, c in ipairs({ "sg.ShadowQuality 1", "sg.EffectsQuality 1", "sg.PostProcessQuality 1", "sg.FoliageQuality 1", "r.MotionBlurQuality 0" }) do
-                    ks:ExecuteConsoleCommand(pc:GetWorld(), c, pc)
-                end
+            if not (pc and ks) then return end
+            local q = low and 1 or 3
+            for _, g in ipairs({ "Shadow", "Effects", "PostProcess", "Foliage" }) do
+                ks:ExecuteConsoleCommand(pc:GetWorld(), ("sg.%sQuality %d"):format(g, q), pc)
             end
+            ks:ExecuteConsoleCommand(pc:GetWorld(), "r.MotionBlurQuality " .. (low and 0 or 4), pc)
+            if low then
+                if not marked then local f = io.open(mark, "w"); if f then f:write("1"); f:close() end end
+                return
+            end
+            local gus = FindFirstOf("GameUserSettings")
+            if gus and gus:IsValid() and not gus:GetFullName():find("Default__", 1, true) then gus:SaveSettings() end
+            os.remove(mark)
+            log("performance mode off: shadows/effects/post processing/foliage restored to high")
         end)
     end
     if Game.dead and (Config.respawn_at_friend == true or Config.respawn_at_friend == "true") then Game.respawn_tp_at = game_time + 4 end
@@ -3504,7 +3540,8 @@ _G.PoppyCoop = { assets_changed = Game.assets_changed, crumb = crumb, late = lat
 _G.PoppyCoop.chat_send = Ping.say
 -- experimental chapters: world sync (doors, items, levels...) only when the launcher's "Try world sync" is on
 local EXP_WORLD = Config.exp_world == true or Config.exp_world == "true"
-for _, m in ipairs((EXPERIMENTAL and not EXP_WORLD) and { "coop_extra" } or { "coop_world", "coop_extra" }) do
+-- (no new local here: main.lua is at Lua's 200-locals limit) Chapter 5 has its own, state based world sync
+for _, m in ipairs(CHAPTER == 5 and { "coop_ch5", "coop_extra" } or ((EXPERIMENTAL and not EXP_WORLD) and { "coop_extra" } or { "coop_world", "coop_extra" })) do
     local ok, err = pcall(require, m)
     if not ok and not tostring(err):find("not found") then log("module %s: %s", m, tostring(err)) end
 end
