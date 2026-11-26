@@ -5,6 +5,8 @@ It's free to play, with no account needed. You just need the launcher.
 
 > Fan-made. Not affiliated with or endorsed by Mob Entertainment.
 
+⭐ **Enjoying the mod? Please give this repo a star** (button at the top right) - it's free and helps other players find PoppyCoop!
+
 ## Download
 
 Download the latest **[`PoppyCoop_Launcher_1.7.6.zip`](Upload%20to%20GitHub%20-%201.7.6/PoppyCoop_Launcher_1.7.6.zip)**
