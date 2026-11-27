@@ -7,7 +7,7 @@ It's free to play, with no account needed. You just need the launcher.
 
 ## Download
 
-Download **`PoppyCoop_Launcher_1.7.6.zip`**
+Download **`PoppyCoop_Launcher_1.7.7.zip`**
 from this folder (or from Releases), unzip it, and run **`PoppyCoopLauncher.exe`**.
 
 Windows may show "Windows protected your PC" because the launcher isn't signed:
@@ -112,6 +112,19 @@ puzzle steps, inventory, item pickups, moving parts with sane values). Anything 
 - Rule of thumb: no engine errors in normal play. Each error leaks memory in UE4SS 3.0.1 and eventually crashes the game.
 
 ## Changelog
+
+### 1.7.7
+- **Chapter 2: the 2-3 second freezes are gone.** When you entered a new area the mod hooked hundreds of game functions in one go (each costs a few ms). It now spreads this over many frames and hooks about half as many functions in Chapter 2. Several scans that ran every 30-60 s are cheaper or rarer, so there are fewer small stutters too.
+- **Chapter 2: crash fixed (the most common one since 1.6.5).** When a friend's GrabPack cable changed colour (power on/off), the mod could hand the game a material that had already been freed - a crash for one or both players. Every cable part now keeps its own material.
+- **Chapter 2: levers no longer flip back and forth** when the two games disagreed about them; they are synced by pulling, not by their position.
+- **Button presses are applied once on the friend's side** (they were applied twice, so switches undid themselves), presses pulled again quickly are no longer dropped, and the friend's progress you get when joining (doors, items, green hand) is no longer thrown away when you spawn at the first checkpoint.
+- **Fewer falls out of the map:** the mod never unloads an area you stood in during the last minute, F6 waits until there is real floor next to your friend and puts you behind them (not into a wall), and if you still fall you are put back where you were. Your friend's invisible collision blocks no longer float 50 m under them.
+- **"Can't change settings" fixed:** a settings save the game had left empty (game closed while saving) is moved aside so the game makes a new one, the mod's message boxes no longer catch mouse clicks over the game menu, and the launcher now closes the game properly instead of killing it.
+- **Lighting:** the repair of the old performance-mode leftover runs once more and goes through the game's own settings so the game doesn't undo it.
+- **"Subtitles":** the "is watching a cutscene" message no longer shows while you are in a cutscene yourself.
+- **Chapter 1:** two scans that ran every 0.5 s / 3 s all session now run rarely (smoother fps), respawns no longer scan everything in one frame, and a few objects that could be freed while an area streamed out are looked up fresh (crash protection).
+- **Chapter 2: rooms no longer go dark / grey for your friend.** Lamps switching off in one game were switched off in the other game too, so a room was dark and only your own light lit it up ("grey, black and white around us"). Each game now keeps its own lamps, like in the normal game.
+- **Chapter 2: the mod no longer stops working after a while.** A minigame hook that could not be set was retried every 5 s, and each failed try used up a bit of memory inside UE4SS until the mod crashed with "C stack overflow".
 
 ### 1.7.6
 - **Chapters 3-5: fewer crashes when a level loads.** The mod no longer loads shapes for the friend figures while the game is still loading a level (in Unreal 5 that could end in a crash, seen in several Chapter 3 reports). Figures use shapes the game already has.

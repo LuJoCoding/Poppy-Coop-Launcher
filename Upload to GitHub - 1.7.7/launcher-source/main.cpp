@@ -2307,8 +2307,18 @@ static void kill_game(const Chapter& c) {
     PROCESSENTRY32W pe = { sizeof(pe) };
     for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
         if (_wcsicmp(pe.szExeFile, c.shipping.c_str()) != 0) continue;
-        HANDLE ph = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-        if (ph) { TerminateProcess(ph, 0); CloseHandle(ph); }
+        // 1.7.7: ask the game to close first (WM_CLOSE to its windows) and give it 5 s - a hard kill while it
+        // was saving left empty save files (SG_Graphics2.sav: options menu broken, settings stuck)
+        DWORD pid = pe.th32ProcessID;
+        HANDLE ph = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+        if (!ph) continue;
+        EnumWindows([](HWND w, LPARAM lp) -> BOOL {
+            DWORD wp = 0; GetWindowThreadProcessId(w, &wp);
+            if (wp == (DWORD)lp && IsWindowVisible(w)) PostMessageW(w, WM_CLOSE, 0, 0);
+            return TRUE;
+        }, (LPARAM)pid);
+        if (WaitForSingleObject(ph, 5000) != WAIT_OBJECT_0) TerminateProcess(ph, 0);
+        CloseHandle(ph);
     }
     CloseHandle(snap);
 }

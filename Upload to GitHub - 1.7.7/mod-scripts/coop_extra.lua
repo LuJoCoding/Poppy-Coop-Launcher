@@ -119,12 +119,16 @@ function UI.box(content, pad, alpha)
     pad = pad or { 12, 6, 14, 6 }
     b:SetPadding({ Left = pad[1], Top = pad[2], Right = pad[3], Bottom = pad[4] })
     if content then b:SetContent(content) end
+    -- 1.7.7: boxes must not catch mouse clicks over the game's own menus (UMG default is Visible = hit-testable);
+    -- the chat panel switches itself back to Visible while it is open
+    pcall(function() b:SetVisibility(3) end)   -- HitTestInvisible
     return b
 end
 function UI.bar(col)
     local b = UI.new("Border")
     b:SetBrushColor(lin(col, 1))
     b:SetPadding({ Left = 2, Top = 0, Right = 2, Bottom = 0 })
+    pcall(function() b:SetVisibility(3) end)
     return b
 end
 -- canvas slot: anchor (ax, ay) of the screen, alignment (px, py) of the widget, offset in slate units
@@ -325,6 +329,14 @@ function UI.input_mode(ui)
         else pcall(function() wbl:SetInputMode_UIOnlyEx(pc, UI.input, 0) end) end
         pcall(function() UI.input:SetKeyboardFocus() end)
     else
+        -- 1.7.7: leave the input mode alone while the game's pause/options menu is open (GameOnly took the
+        -- mouse away from it)
+        local paused = false
+        pcall(function()
+            local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+            paused = gs:IsGamePaused(pc) == true
+        end)
+        if paused then return end
         if ue5 then pcall(function() wbl:SetInputMode_GameOnly(pc, false) end)
         else pcall(function() wbl:SetInputMode_GameOnly(pc) end) end
     end
@@ -477,6 +489,7 @@ do
     local last = -100
     local ok, err = pcall(function()
         RegisterHook("/Script/MovieScene.MovieSceneSequencePlayer:Play", function(self)
+            P.LocalSeqAt = now()
             if now() - last < 15 or not Coop.active() then return end
             last = now()
             local name = try(function() return self:get():GetOuter():GetFName():ToString() end) or "?"
@@ -486,6 +499,8 @@ do
     if not ok then log("cutscene hook: %s", tostring(err)) end
 end
 Handlers.event.cutscene = function(from)
+    -- 1.7.7: not while a sequence plays here too (it then read like a subtitle over our own cutscene)
+    if now() - (P.LocalSeqAt or -100) < 30 then return end
     popup("is watching a cutscene - wait for them?", "info", pname(from))
 end
 
@@ -650,7 +665,8 @@ local function scan_motion()
         end
     end
     if ENABLE_HUGGY then
-        for _, a in ipairs(try(function() return FindAllOf("Character") end) or {}) do
+        -- 1.7.7: from the census (a second walk over every object here cost 5-15 ms each time)
+        for _, a in ipairs(census().Character or {}) do
             local cls = valid(a) and try(function() return a:GetClass():GetFName():ToString() end) or ""
             local l = cls:lower()
             for _, w in ipairs(MONSTERS) do
@@ -763,6 +779,8 @@ local function motion_tick(dt)
             local d = dist(me, t.cur)
             far = (d > 2500 and t_now - (t.read_at or 0) < 1) or (d > 800 and t_now - (t.read_at or 0) < 0.25)
                 or (d > 400 and t_now - (t.read_at or 0) < 0.1)
+                -- 1.7.7: a resting prop close by is read ~30x a second, not every frame
+                or (t_now - (t.read_at or 0) < 0.033 and not (t.moved_at and t_now - t.moved_at < 2))
         end
         local ok, err = (far and true) or pcall(function()
             t.read_at = t_now
@@ -986,7 +1004,9 @@ local POSE_CLASSES = {
     factorygrate_BP_C = true,
     -- Chapter 1: bridges in the factory pulled into place with the GrabPack
     TwoWayBridge_BP_C = true, MachineBridgeOneWay_BP_C = true,
-    BP_FloorDoor_C = true, BP_PullLever_C = true, GarageLever_C = true, BP_Hub_CraneHandle_C = true,
+    -- 1.7.7: levers (BP_PullLever_C, GarageLever_C) left out - their blueprint turns them from its own state every
+    -- tick, so a synced pose fought it and the lever flipped back and forth; they are synced by function instead
+    BP_FloorDoor_C = true, BP_Hub_CraneHandle_C = true,
     BP_CraneHandle_C = true, catwalk_pivot_C = true, BP_SlidingGate_C = true, PullOffVent_Office_C = true,
     PullOffVent_C = true, BP_PullOffSpiderWeb_C = true, Huggy_Grabpack_cutout_BP_C = true,
     Mommy_Text_Cutout_BP_C = true, Kissy_Train_Cutout_ButtonBP_C = true, Mommy_Train_CutoutBP_C = true,
@@ -1069,7 +1089,7 @@ if P.CHAPTER == 2 then CENSUS_WANT.StaticMeshActor = true end   -- physics props
 -- hard mode (config hard_mode=true, launcher "Harder enemies"): enemies (every Character that isn't a player)
 -- get faster with more players in the room: +15 % per extra player, at most +45 %.
 local HARD = Cfg.hard_mode == true or Cfg.hard_mode == "true"
-if HARD then CENSUS_WANT.Character = true end
+if HARD or ENABLE_HUGGY then CENSUS_WANT.Character = true end   -- 1.7.7: monsters from the census too
 local HardDone = {}      -- actor address -> true (speed already raised)
 local CensusKind = {}   -- class name -> wanted class it counts as, or false
 -- The census runs when the set of loaded levels changes (new areas = new props/parts/classes) and otherwise
@@ -1077,7 +1097,7 @@ local CensusKind = {}   -- class name -> wanted class it counts as, or false
 -- across frames (a garbage collection in between frees actors, touching them crashes UE4SS). Each actor's
 -- class is remembered by its address, so a census is FindAllOf("Actor") (~12-16 ms) plus a table lookup per
 -- actor; only actors not seen before have their class read (the expensive part, ~5 us each).
-local CENSUS_EVERY = 60
+local CENSUS_EVERY = P.CHAPTER == 2 and 120 or 60   -- 1.7.7: CH2 every 2 min (each census 20-80 ms)
 local CENSUS_MIN_GAP = 5                -- streaming comes in bursts: at most one census per 5 s
 local Census = { by = {}, classes = {}, gen = 0, at = -100, levels = -1, lv_at = -100, want = true }
 P.Census = Census
@@ -1259,7 +1279,12 @@ local function pose_tick(dt)
             local dx, dy, dz = e.pos[1] - me.X, e.pos[2] - me.Y, e.pos[3] - me.Z
             near = dx * dx + dy * dy + dz * dz < 2500 * 2500
         end
-        if (near or slow or e.moving) and not (e.remote_until and t < e.remote_until) and alive(e) then
+        -- 1.7.7: the game settling a part right after a remote pose is not this player moving it (that echo
+        -- went back as a new final pose and the two games fought over it)
+        local echo = e.remote_until and t < e.remote_until + 1.5
+        if echo and not (t < e.remote_until) and alive(e) then
+            local okr, vr = pcall(read_pose, e.comp, e.actor); if okr then e.last = vr end
+        elseif (near or e.moving) and not echo and alive(e) then
             local ok, v = pcall(read_pose, e.comp, e.actor)
             if ok then
                 if pose_diff(v, e.last) then
@@ -1272,8 +1297,8 @@ local function pose_tick(dt)
                 elseif not e.moving then
                     -- after a level reload a part is back at its start pose: put it where it was left
                     local fv = Pose.final[e.key]
-                    if fv and pose_diff(v, fv) and t - (e.applied_at or 0) > 2 then
-                        e.applied_at = t
+                    if fv and pose_diff(v, fv) and not e.final_applied then   -- 1.7.7: once per object (was every 2 s)
+                        e.final_applied = true
                         e.target, e.remote_until = fv, t + 0.8
                     end
                 end
@@ -1488,11 +1513,22 @@ local function mg_hook(from_census)
                 for _, w in ipairs(wanted) do
                     local key = cp .. ":" .. w[1]
                     if not MG.ok[key] then
-                        local ok = pcall(RegisterHook, key, w[2])
+                        -- 1.7.7: only a live function (a failed RegisterHook leaks C stack inside UE4SS; retried
+                        -- every 5 s that ended in "C stack overflow" and a dead mod), and at most 6 failures
+                        local fo = try(StaticFindObject, key)
+                        local flags = valid(fo) and try(function() return fo:GetFunctionFlags() end)
+                        local ok = false
+                        if flags and flags ~= 0 then ok = pcall(RegisterHook, key, w[2]) end
                         if ok then MG.ok[key] = true else all = false end
                     end
                 end
-                if all then MG.hooked[g.cls] = true else MG.retry_at = now() + 5 end
+                MG.fails = MG.fails or {}
+                if all then MG.hooked[g.cls] = true
+                else
+                    MG.fails[g.cls] = (MG.fails[g.cls] or 0) + 1
+                    MG.cp[g.cls] = nil                          -- look the class up again next time
+                    if MG.fails[g.cls] < 6 then MG.retry_at = now() + 5 end
+                end
                 log("minigame sync for %s: %s", g.cls, all and "on" or "retrying")
             end
         end

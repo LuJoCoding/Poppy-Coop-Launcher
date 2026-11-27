@@ -76,7 +76,19 @@ P.NO_SHARE_PATHS = { "UnloadEntrance", "LevelStreamingVolume", "ToyPartsSpline",
 -- when its own player gets there - a friend's start put Huggy and an invisible wall in front of the other player
 P.HUGGY_PATHS = { "HuggyCharacter", "HuggyVent", "HuggyTrigger", "Hug_Reveal", "TubeCollision", "fence_stair_block",
     "CloseDoorVentDoor" }
+-- 1.7.7: Chapter 2 lamps follow the level events that switch them in each game. Sharing their own calls
+-- (Deactivate / ElectricalInterface) switched lamps OFF in the friend's game: dark rooms where only the
+-- player's own light showed anything - "grey / black and white around us" (report 2026-11-27)
 P.no_share = function(path, fn)
+    if P.CHAPTER == 2 and path then
+        -- the actor's own name (HangingLight_C_3, BP_FancyLight_C_1, PoppyNightLight, vent_light_red_BP...), but
+        -- not light LEVERS / switches / pads - those are what players use
+        local short = (path:match("([^.:]+)$") or path):lower()
+        if (short:find("light", 1, true) or short:find("lamp", 1, true)) and not (short:find("lever", 1, true)
+            or short:find("switch", 1, true) or short:find("pad", 1, true) or short:find("button", 1, true)) then
+            return true
+        end
+    end
     if P.CHAPTER ~= 1 or not path then return false end
     if P.CLOSE_FNS[fn] and (path:find("Door", 1, true) or path:find("Gate", 1, true)) then return true end
     for _, w in ipairs(P.NO_SHARE_PATHS) do if path:find(w, 1, true) then return true end end
@@ -345,17 +357,30 @@ end
 
 ------------------------------------------------------- echo suppression
 local replaying = 0          -- >0 while we apply a remote event
-local recent = {}            -- key -> game_time, events we sent or applied (dedupe window)
-local DEDUPE = 8.0
+-- 1.7.7: dedupe windows were 8 s (1.2 s for presses) in ONE table for both directions: a lever pulled again
+-- within 8 s (by us, or after the friend pulled it) was never sent, and fast presses on counter buttons (train
+-- code) got lost. Now short windows; received keys are per sender; a received key still blocks sending the
+-- same thing back for the window (the game repeating a replayed call a frame later is not a new action).
+local recent = {}            -- key -> game_time (received: "from|key"; sent: key)
+local DEDUPE = P.CHAPTER == 1 and 8.0 or 2.0      -- (CH1 blueprints re-fire calls 2-3 s after a replay)
 -- Interactions (doors etc.) fire several times while the button is held; one press = one event.
 -- A deliberate second press a moment later (close the door again) must still go through.
-local DEDUPE_INTERACT = 1.2
+local DEDUPE_INTERACT = P.CHAPTER == 1 and 1.2 or 0.4
+P.DEDUPE_ECHO = P.CHAPTER == 1 and 8.0 or 4.0  -- our own event coming back from a friend's game
 local function seen_recently(key)
     local t = recent[key]
-    local window = key:find("|On Interact|", 1, true) and DEDUPE_INTERACT or DEDUPE
+    local window = key:find("|On Interact|", 1, true) and DEDUPE_INTERACT
+        or (key:sub(1, 4) == "out|" and P.DEDUPE_ECHO) or DEDUPE
     return t and P.game_time() - t < window
 end
-local function mark(key) recent[key] = P.game_time() end
+local function mark(key)
+    local t = P.game_time()
+    recent[key] = t
+    if t - (recent.__swept or 0) > 10 then          -- bounded: drop entries older than 10 s
+        recent.__swept = t
+        for k, v in pairs(recent) do if k ~= "__swept" and t - v > 10 then recent[k] = nil end end
+    end
+end
 
 ------------------------------------------------------------------ ledger
 local Ledger = {}            -- ordered list of { kind, path, fn, args, remote }
@@ -379,7 +404,7 @@ local function ledger_add(kind, path, fn, args, remote, allow_dupes)
     local key = ekey(kind, path, fn, args)
     if LedgerKeys[key] and not allow_dupes then return end
     LedgerKeys[key] = true
-    Ledger[#Ledger + 1] = { kind = kind, path = path, fn = fn, args = args, remote = remote }
+    Ledger[#Ledger + 1] = { kind = kind, path = path, fn = fn, args = args, remote = remote, at = P.game_time() }
 end
 
 local ChildCache = {}
@@ -398,7 +423,11 @@ find_actor = function(path)
     local c = ChildCache[path]
     -- (an area reload can put the new parent at the old address: the cached child is only trusted within the
     -- same level generation, see P.LevelsChanged)
-    if c and c.paddr == paddr and c.lgen == (P.LevelGen or 0) then return c.a end
+    if c and c.paddr == paddr and c.lgen == (P.LevelGen or 0) then
+        -- 1.7.7: looked up again by path + address (a kept child could be freed by a streaming change)
+        local o = c.path and try(StaticFindObject, c.path)
+        if o and valid(o) and try(function() return o:GetAddress() end) == c.addr then return o end
+    end
     local found
     pcall(function()
         local cls = StaticFindObject("/Script/Engine.ChildActorComponent")
@@ -412,7 +441,8 @@ find_actor = function(path)
             end
         end
     end)
-    ChildCache[path] = found and { a = found, paddr = paddr, lgen = P.LevelGen or 0 } or nil
+    ChildCache[path] = found and { paddr = paddr, lgen = P.LevelGen or 0, addr = try(function() return found:GetAddress() end),
+        path = try(function() return found:GetFullName():match("^%S+ (.+)$") end) } or nil
     return found
 end
 
@@ -934,8 +964,10 @@ local function receive(e, from)
     local key = ekey(e.kind, e.path, e.fn, e.args)
     ledger_add(e.kind, e.path, e.fn, e.args, true, e.kind == "pfn" or e.kind == "cfn")
     if e.kind ~= "pfn" and e.kind ~= "cfn" then
-        if seen_recently(key) then trace("skip duplicate %s from %d", key, from); return end
-        mark(key)
+        local rk = tostring(from) .. "|" .. key
+        if seen_recently(rk) or seen_recently("out|" .. key) then trace("skip duplicate %s from %d", key, from); return end
+        mark(rk)
+        mark(key)                                   -- don't echo it back right away
     end
     if e.kind == "act" then
         if lsa_fn(e.fn) then log("level event %s from player %s", tostring(e.fn):sub(1, 60), tostring(from)) end
@@ -943,6 +975,7 @@ local function receive(e, from)
     if P.LIVE_ONLY_FNS[e.fn or ""] and (P.quiet() or not find_actor(e.path)) then
         trace("DROP live-only %s: not loaded here right now", key); return
     end
+    e.at = P.game_time()
     if P.quiet() or not apply(e) then
         Pending[key .. ((e.kind == "pfn" or e.kind == "cfn") and ("#" .. #Ledger) or "")] = e
         trace("PENDING %s (target not loaded)", key)
@@ -952,8 +985,20 @@ end
 local function retry_pending()
     if P.ReplayHold and P.game_time() < P.ReplayHold then return end
     if P.quiet() then return end
-    for key, e in pairs(Pending) do
-        if apply(e) then Pending[key] = nil end
+    -- 1.7.7: an entry is taken out BEFORE it is applied - an engine error inside one aborted the whole chunk
+    -- every 5 s at the same entry, so everything after it was never applied; and entries expire (~10 min)
+    local keys = {}
+    for k in pairs(Pending) do keys[#keys + 1] = k end
+    for _, k in ipairs(keys) do
+        local e = Pending[k]
+        Pending[k] = nil
+        if e then
+            e.tries = (e.tries or 0) + 1
+            -- inventory events (pfn/cfn) never expire: they are not re-applied when a level loads
+            local keep = e.kind == "pfn" or e.kind == "cfn" or e.tries <= 120
+            if keep and not apply(e) then Pending[k] = e
+            elseif not keep then trace("PENDING expired %s", k) end
+        end
     end
 end
 
@@ -1029,6 +1074,26 @@ local ACT_FNS = { "DoorOpen", "DoorClose", "UpdateLightPads", "UpdateVolume", "D
     "Remove3DItemFromPlayerInventory" }              -- Chapter 2: a door/slot used up an inventory item
 local ACT_SET = {}
 for _, f in ipairs(ACT_FNS) do ACT_SET[f] = true end
+-- 1.7.7: Chapter 2 puts the whole activation interface on ~50 generic classes (particles, screens, pipes...).
+-- Hooking all 19 functions on each cost ~900 RegisterHook calls (1.5-6 ms each) = the 2-3 s freezes. A trace of
+-- real CH2 play used only these four everywhere; the rest is hooked only on classes whose name fits them.
+local HQ = { reg = {}, defer = false }   -- 1.7.7 hook helpers (one local: this chunk is at the 200-locals limit)
+HQ.ALWAYS = { DoorOpen = true, DoorClose = true, Deactivate = true, ElectricalInterface = true,
+    ["Trigger Checkpoint"] = true, ["Save New Checkpoint"] = true, Remove3DItemFromPlayerInventory = true }
+HQ.WORDS = { "Rising", "Crane", "Machine", "Claw", "Platform", "Door", "Gate", "Light", "Volume",
+    "Conveyor", "Elevator", "Lift", "Train", "Button", "Lever", "Switch", "Pad" }
+function HQ.wanted(cname, fname)
+    if HQ.ALWAYS[fname] then return true end
+    if P.CHAPTER == 1 and not (Config.ch1_act_filter == true or Config.ch1_act_filter == "true") then return true end   -- CH1: all (traces cover only parts)
+    -- Chapter 1 traces also used LockDoor and ToyMachineOne (Make-A-Friend) - kept everywhere there
+    if P.CHAPTER == 1 and (fname == "LockDoor" or fname:find("^ToyMachine")) then return true end
+    if P.CHAPTER ~= 1 and P.CHAPTER ~= 2 then return true end
+    if Config.all_act_fns == true or Config.all_act_fns == "true" or Config.ch2_all_act_fns == true
+        or Config.ch2_all_act_fns == "true" then return true end
+    local short = cname:match("[%.:]([^%.:]+)$") or cname
+    for _, w in ipairs(HQ.WORDS) do if short:find(w, 1, true) then return true end end
+    return false
+end
 -- Chapter 2 doors: any of these on a DoorBP/DoorChildBP means "this door is being opened". Shared as a
 -- single CoopOpenDoor event (replaying DoorOpen/Remove3DItem alone does not swing the door, and replaying
 -- Remove3DItem took the other player's key away).
@@ -1096,7 +1161,7 @@ local SKIP_FN = { ExecuteUbergraph = 1, UserConstructionScript = 1, ReceiveTick 
 -- Which "On Interact" calls are world mechanisms (replayed on peers) vs personal pickups (not replayed;
 -- their disappearance is synced instead). Matched against the actor's name. Overridable in config.txt.
 local REPLAY_PATTERNS = {}
-for p in tostring(Config.interact_replay or "Door,Grate,Vent,Lever,Button,Switch,Breaker,Claw,Machine,Gate,Elevator,Lift,Power,Fuse"):gmatch("[^,%s]+") do
+for p in tostring(Config.interact_replay or "Door,Grate,Vent,Lever,Button,Switch,Breaker,Claw,Machine,Gate,Elevator,Lift,Power,Fuse,Handle"):gmatch("[^,%s]+") do
     REPLAY_PATTERNS[#REPLAY_PATTERNS + 1] = p:lower()
 end
 local NO_REPLAY = { "tape", "vhs", "storage", "pickup", "battery", "hand", "item", "collect" }
@@ -1104,7 +1169,9 @@ local function replay_interact(path)
     local name = (path:match("%.([^.]+)$") or path):lower()
     -- the VHS recorder: a friend playing a tape plays it for you too - only when you are next to it (see apply)
     if name:find("vhsplayer", 1, true) then return true end
-    for _, p in ipairs(NO_REPLAY) do if name:find(p, 1, true) then return false end end
+    -- 1.7.7: "hand" also matched crane/swing HANDLES - those are switches, not hand pickups
+    local nh = name:gsub("handle", "")
+    for _, p in ipairs(NO_REPLAY) do if nh:find(p, 1, true) then return false end end
     for _, p in ipairs(REPLAY_PATTERNS) do if name:find(p, 1, true) then return true end end
     return false
 end
@@ -1198,6 +1265,7 @@ local function share_now(e)
             return
         end
         mark(key)
+        mark("out|" .. key)                         -- (its echo from the friend's game is dropped, see receive)
     end
     trace("SEND %s", key)
     send(e)
@@ -1221,6 +1289,9 @@ local function flush_shares()
     FrameQ = {}
     local lsa
     for _, e in ipairs(q) do if e.lsa then lsa = e end end      -- the last one seen is the outermost
+    -- 1.7.7: a pressed button (On Interact) is the root of the calls it made: the friend's replay of the press
+    -- runs them again, so sending them too applied every switch twice (toggles cancelled out)
+    if not lsa then for _, e in ipairs(q) do if e.root then lsa = e end end end
     -- (the level script can run inside the checkpoint load, before its hook: checked again here)
     if lsa and lsa.fn:find("^ExecuteUbergraph") and P.SpawnAt and P.game_time() - P.SpawnAt < 10 then
         trace("level event %s during our checkpoint load: not shared", lsa.fn)
@@ -1228,7 +1299,7 @@ local function flush_shares()
     end
     if lsa then
         share_now(lsa)
-        log("shared level event %s (%d nested calls not sent)", lsa.fn:sub(1, 60), #q - 1)
+        if #q > 1 then log("shared %s %s (%d nested calls not sent)", lsa.root and "press" or "level event", lsa.fn:sub(1, 60), #q - 1) end
     else
         for _, e in ipairs(q) do share_now(e) end
     end
@@ -1250,7 +1321,7 @@ local function on_local_call(cname, fnname, ctx, ...)
     if P.crumb then P.crumb("hook " .. hk:match("([^/]+)$")) end
     local pf = P.Perf
     if pf then pf.hooks = pf.hooks + 1; pf.by[hk] = (pf.by[hk] or 0) + 1 end
-    if Hot[hk] then return end
+    if Hot[hk] and os.clock() < Hot[hk] then return end   -- 1.7.7: for 60 s, not forever
     -- Chapter 1 / 2 streaming volume (walking through it loads the next area): the volume may sit in an area
     -- that this very call unloads - reading it afterwards (its name, its level lists) read freed memory and
     -- crashed UE4SS for both players at the same spot. Its lists are read beforehand (P.cache_volumes); here
@@ -1265,13 +1336,17 @@ local function on_local_call(cname, fnname, ctx, ...)
         P.VolNeedScan = true
         return
     end
-    if P.quiet() and not CP_FNS_ALL[fnname] and not DEATH_SET[fnname] then return end
+    if P.quiet() and not CP_FNS_ALL[fnname] and not DEATH_SET[fnname] then
+        P.QuietDrops = (P.QuietDrops or 0) + 1      -- 1.7.7: counted (F11 / log) - these used to vanish silently
+        trace("QUIET drop %s:%s", cname, fnname)
+        return
+    end
     local sec = math.floor(os.clock())
     if sec ~= HotSec then HotSec = sec; HotCount = {} end
     local c = (HotCount[hk] or 0) + 1
     HotCount[hk] = c
-    if c > 25 and not DEATH_SET[fnname] then
-        Hot[hk] = true
+    if c > 25 and not DEATH_SET[fnname] and replaying == 0 then
+        Hot[hk] = os.clock() + 60
         log("ignoring %s (called every frame)", hk)
         return
     end
@@ -1464,7 +1539,7 @@ local function on_local_call(cname, fnname, ctx, ...)
             return
         end
         if SYNC_ACT and replay_interact(path) and args then
-            share({ kind = "act", path = path, fn = fnname, args = args })
+            share({ kind = "act", path = path, fn = fnname, args = args, root = true })
         end
         return
     end
@@ -1483,7 +1558,39 @@ local function on_local_call(cname, fnname, ctx, ...)
 end
 
 local seen_class_addr = {}
+-- 1.7.7: class addresses are reused after a level unloads: a class of a new area at an old address was never
+-- hooked. (HookedPath still keeps every function from being registered twice.)
 local HookedPath = {}        -- "class path:function" -> registered once for the whole session
+table.insert(P.Handlers.unload, function()
+    seen_class_addr = {}
+    -- queued registrations belong to the old levels: drop them (they can be queued again later)
+    for _, r in ipairs(HQ.reg) do HookedPath[r[1] .. ":" .. r[2]] = nil end
+    HQ.reg = {}
+end)
+-- 1.7.7: RegisterHook calls waiting to be made, a few per frame (each costs 1.5-6 ms - a whole class at once was
+-- 30-110 ms, a burst of classes whole seconds)
+function HQ.register(cname, fname)
+    local hp = cname .. ":" .. fname
+    -- the class may have streamed out since it was queued: a failed RegisterHook inside UE4SS leaks C stack
+    -- (after ~40 of them: "C stack overflow" and the mod stops working) - only register a live function
+    local fo = try(StaticFindObject, hp)
+    local flags = valid(fo) and try(function() return fo:GetFunctionFlags() end)
+    if not flags or flags == 0 then HookedPath[hp] = nil; return end
+    local ok, err = pcall(RegisterHook, hp, function(ctx, ...)
+        -- inside a game call: actor_path must not call engine functions (see actor_path)
+        P.InHook = (P.InHook or 0) + 1
+        local ok2, err2 = pcall(on_local_call, cname, fname, ctx, ...)
+        P.InHook = P.InHook - 1
+        if not ok2 then error(err2, 0) end
+    end)
+    if ok then
+        hook_count = hook_count + 1
+        local l = fname:lower()
+        for _, w in ipairs(TRACE_WORDS) do if l:find(w, 1, true) then HookedFns[hp] = true end end
+    else
+        HookedPath[hp] = nil; hook_fail = hook_fail + 1; trace("hook failed %s %s", hp, tostring(err))
+    end
+end
 local function hook_class(cls, trace_everything)
     local addr = try(function() return cls:GetAddress() end)
     if addr and seen_class_addr[addr] then return end
@@ -1509,20 +1616,9 @@ local function hook_class(cls, trace_everything)
         local flags = try(function() return fns[fname]:GetFunctionFlags() end)
         if not flags or flags == 0 then HookedPath[hp] = nil; return end          -- class going away: try again later
         if (flags & 0x00100000) ~= 0 or (flags & 0x00000400) ~= 0 then return end   -- delegate / native: not hookable safely
-        local ok, err = pcall(RegisterHook, cname .. ":" .. fname, function(ctx, ...)
-            -- inside a game call: actor_path must not call engine functions (see actor_path)
-            P.InHook = (P.InHook or 0) + 1
-            local ok, err = pcall(on_local_call, cname, fname, ctx, ...)
-            P.InHook = P.InHook - 1
-            if not ok then error(err, 0) end
-        end)
-        if ok then
-            local l = fname:lower()
-            for _, w in ipairs(TRACE_WORDS) do if l:find(w, 1, true) then HookedFns[cname .. ":" .. fname] = true end end
-        end
-        if ok then hook_count = hook_count + 1 else HookedPath[hp] = nil; hook_fail = hook_fail + 1; trace("hook failed %s:%s %s", cname, fname, tostring(err)) end
+        if HQ.defer then HQ.reg[#HQ.reg + 1] = { cname, fname } else HQ.register(cname, fname) end
     end
-    for _, f in ipairs(ACT_FNS) do try_hook(f) end
+    for _, f in ipairs(ACT_FNS) do if HQ.wanted(cname, f) then try_hook(f) end end
     if is_door_class(cname) then for _, f in ipairs(DOOR_FNS) do try_hook(f) end end
     local rm = REMAP[short_class(cname)]
     if rm then for f in pairs(rm) do try_hook(f) end end
@@ -1604,7 +1700,7 @@ end
 -- (a class of a level that streamed out may be freed) - the census after that change queues them again.
 local HookQ = {}
 local HOOK_BUDGET = 0.004
-local HOOK_ALL_AT_ONCE = 60
+HQ.ALL_AT_ONCE = 60
 local function hook_log(before)
     if hook_count ~= before then
         local n = 0 for _ in pairs(hooked_classes) do n = n + 1 end
@@ -1612,13 +1708,19 @@ local function hook_log(before)
     end
 end
 local function hook_queue_tick()
-    if #HookQ == 0 then return end
+    if #HookQ == 0 and #HQ.reg == 0 then return end
     local before, c0 = hook_count, os.clock()
-    while #HookQ > 0 and os.clock() - c0 < HOOK_BUDGET do
+    HQ.defer = true
+    while #HookQ > 0 and #HQ.reg < 40 and os.clock() - c0 < HOOK_BUDGET do
         pcall(hook_census_class, table.remove(HookQ))
     end
-    hook_log(before)
-    if #HookQ == 0 then retry_pending() end
+    HQ.defer = false
+    repeat                                   -- ~HOOK_BUDGET of RegisterHook per frame, at least one
+        local r = table.remove(HQ.reg, 1)
+        if r then HQ.register(r[1], r[2]) end
+    until #HQ.reg == 0 or os.clock() - c0 >= HOOK_BUDGET
+    HQ.log_from = HQ.log_from or before
+    if #HookQ == 0 and #HQ.reg == 0 then hook_log(HQ.log_from); HQ.log_from = nil; retry_pending() end
 end
 P.CensusDone = P.CensusDone or {}
 table.insert(P.CensusDone, function(classes)
@@ -1628,7 +1730,7 @@ table.insert(P.CensusDone, function(classes)
         local ad = try(function() return e.cls:GetAddress() end)
         if ad and not seen_class_addr[ad] then new[#new + 1] = e end
     end
-    if #new > HOOK_ALL_AT_ONCE or not Coop.active() then
+    if #new > HQ.ALL_AT_ONCE and not Coop.active() then   -- 1.7.7: never all at once while playing together
         local before = hook_count
         for _, e in ipairs(new) do pcall(hook_census_class, e) end
         hook_log(before)
@@ -1779,7 +1881,7 @@ Coop.on("rhand", function(from, rest)
     local n = tonumber(rest)
     if not SYNC_HANDS or P.CHAPTER ~= 2 or not n or n <= RH.room then return end
     if P.Fresh.batch[from] and P.fresh() then return end      -- (old progress after New Game, see P.Fresh)
-    RH.room, RH.applied = n, false
+    RH.room, RH.applied, RH.room_at = n, false, P.game_time()
     log("player %d has right hand type %d", from, n)
 end)
 local function check_rhand()
@@ -1846,7 +1948,17 @@ local function floor_pkg()
     if not valid(base) then return nil end
     local owner = try(function() return base:GetOwner() end)
     local path = fullpath(valid(owner) and owner or base) or ""
-    return path:match("/([%w_%-]+)%.[%w_%-]+:PersistentLevel")
+    local pkg = path:match("/([%w_%-]+)%.[%w_%-]+:PersistentLevel")
+    -- 1.7.7: a base in the persistent level (friend's figure blocks, carts, cranes...) says nothing about the room
+    -- we are in - it made the room look "unused" and it was unloaded under us
+    if pkg == Game.map then return nil end
+    if pkg then P.RecentFloor = P.RecentFloor or {}; P.RecentFloor[pkg] = P.game_time() end
+    return pkg
+end
+-- 1.7.7: stood in this level during the last minute (then never unload it)
+P.stood_recently = function(pkg)
+    local t = pkg and P.RecentFloor and P.RecentFloor[pkg]
+    return t ~= nil and P.game_time() - t < 60
 end
 
 -- the streaming slots live as long as the map: look them up again only when the set of loaded levels
@@ -1862,8 +1974,8 @@ local function scan_slots()
     -- slots nested inside streamed levels, e.g. AfterSlide:LevelStreamingDynamic_0). The full FindAllOf
     -- (~12 ms) runs every 30 s; only a full list may drop slots we no longer see.
     local full = false
-    if not SlotList or now - SlotListFullAt > 30 then
-        local quick = SlotList == nil and now - SlotListFullAt <= 30
+    if not SlotList or now - SlotListFullAt > 90 then          -- 1.7.7: 30 -> 90 s (each rebuild 8-70 ms)
+        local quick = SlotList == nil and now - SlotListFullAt <= 90
         local list
         if quick then
             list = {}
@@ -1882,7 +1994,10 @@ local function scan_slots()
         local ls = try(StaticFindObject, pth)
         if not valid(ls) then ls = nil end
         local n = SlotIds[i]
-        if n == nil then n = ls and slot_id(ls) or false; SlotIds[i] = n end   -- name looked up once per list
+        if n == nil then                       -- 1.7.7: from the known path (slot_id did GetFullName again)
+            local outer, nm = pth:match("([%w_%-]+):([%w_]+)$")
+            n = (ls and outer) and (outer .. ":" .. nm) or (ls and slot_id(ls)) or false; SlotIds[i] = n
+        end   -- name looked up once per list
         if ls and n and not seen[n] then
             seen[n] = true
             local load = try(function() return ls:ShouldBeLoaded() end) and true or false
@@ -1915,6 +2030,7 @@ local function scan_slots()
             -- it (door leaves, bridge meshes...) looked alive but were freed -> UE4SS crash (1.6.3-1.6.5 reports,
             -- 30-60 s after the mod reloaded an area for the other player). Other modules drop their caches.
             if s.was_loaded ~= nil and loaded ~= s.was_loaded then
+                P.LevelsChangedAt = P.game_time()
                 for _, f in ipairs(P.LevelsChanged) do pcall(f) end
             end
             s.was_loaded = loaded
@@ -2017,6 +2133,11 @@ local NO_BACKGROUND = { StatuesRoom = true, Mommy_Chase_Redone = true }
 P.BG_ALWAYS = { [1] = { ["04_SteamHallway"] = true, ["05_Storage"] = true }, any = {} }
 for pk in tostring(Config.bg_always_levels or ""):gmatch("[%w_%-]+") do P.BG_ALWAYS.any[pk] = true end
 for pk in tostring(Config.no_background_levels or ""):gmatch("[%w_%-]+") do NO_BACKGROUND[pk] = true end
+-- 1.7.7: friends' areas are loaded one at a time (every 2 s) and not in the first 8 s after a join or a level
+-- change: 7 areas in one frame right at the start made a big streaming + GC burst (crash reports)
+P.LoadPace = P.LoadPace or { next_at = 0, quiet_until = 0 }
+table.insert(P.Handlers.join, function() P.LoadPace.quiet_until = P.game_time() + 8 end)
+table.insert(P.Handlers.unload, function() P.LoadPace.quiet_until = P.game_time() + 8 end)
 local function sync_levels()
     local c0 = os.clock()
     scan_slots()
@@ -2040,8 +2161,12 @@ local function sync_levels()
     local standing = nil
     for n, s in pairs(Slots) do
         if need[n] and not s.last_load then
-            set_slot(n, true); Ours[n] = true
-            log("loading %s (%s) for the other player", n, need[n])
+            local now = P.game_time()
+            if now >= P.LoadPace.next_at and now >= P.LoadPace.quiet_until then
+                P.LoadPace.next_at = now + 2
+                set_slot(n, true); Ours[n] = true
+                log("loading %s (%s) for the other player", n, need[n])
+            end
         elseif need[n] and Ours[n] and s.last_load and not s.vis and P.sobj(s) then
             pcall(function() P.sobj(s):SetShouldBeVisible(true) end)
         elseif need[n] and not Ours[n] and s.last_load and not s.vis_want and P.sobj(s) then
@@ -2055,7 +2180,7 @@ local function sync_levels()
             s.unshown_since = s.unshown_since or now
             if now - s.unshown_since >= 10 then
                 if standing == nil then standing = floor_pkg() or false end
-                if standing ~= false and s.pkg == standing then
+                if standing ~= false and (s.pkg == standing or P.stood_recently(s.pkg)) then
                     s.vis_forced, s.unshown_since = nil, nil          -- we walked in: it's ours now
                 elseif standing ~= false then
                     pcall(function() P.sobj(s):SetShouldBeVisible(false) end)
@@ -2070,7 +2195,7 @@ local function sync_levels()
                 if standing == nil then standing = floor_pkg() or false end
                 if standing == false then
                     -- can't tell where we're standing: never unload (that dropped maps under players)
-                elseif s.pkg and s.pkg == standing then
+                elseif s.pkg and (s.pkg == standing or P.stood_recently(s.pkg)) then
                     s.want = true; Ours[n] = nil
                     log("keeping %s (%s): you're standing in it", n, s.pkg)
                 else
@@ -2209,7 +2334,12 @@ table.insert(P.Handlers.unload, function()
 end)
 local diag_done = false
 
-table.insert(P.Handlers.restart, function() scan_classes() end)
+-- 1.7.7: after a restart the classes come through the census (queued hooks), not one synchronous scan of every
+-- actor + all their hooks in one frame (114 ms seen in a 1.6.9 log)
+table.insert(P.Handlers.restart, function()
+    if P.census_step then pcall(scan_pawn_classes); if P.Census then P.Census.want = true end
+    else scan_classes() end
+end)
 
 ------------------------------------------------------------------ Chapter 1 keys (team inventory)
 -- Keys (GiftshopKey, SimonRoomKey, Security...) go into the player's "Inventory Items" string array straight
@@ -2299,7 +2429,7 @@ table.insert(P.Handlers.tick, function(dt, have)
         replaying = 0
     end
     if #FrameQ > 0 then crumb("world: flush"); pcall(flush_shares) end
-    if #HookQ > 0 and have then crumb("world: hooks"); pcall(hook_queue_tick) end
+    if (#HookQ > 0 or #HQ.reg > 0) and have then crumb("world: hooks"); pcall(hook_queue_tick) end
     if AutoFollow and have then pcall(auto_follow_tick) end
     if not have or not pawn() then return end
     local now = P.game_time()
@@ -2372,14 +2502,20 @@ P.release_replays = function()
 end
 P.new_game_check = function(cp)
     if cp == 0 then
-        local n = #Ledger
+        -- 1.7.7: what arrived after the world change is THIS session's catch-up from the friends (it comes in
+        -- before the spawn at checkpoint 0): keep it. Wiping it lost the friend's doors, items and green hand
+        -- for the whole session (CH2 has no hooked New Game button, so every start at 0 came here).
+        local cut = P.UnloadAt or -1
+        local keep, n = {}, 0
+        for _, e in ipairs(Ledger) do if (e.at or -1) >= cut then keep[#keep + 1] = e else n = n + 1 end end
         for i = #Ledger, 1, -1 do Ledger[i] = nil end
         for k in pairs(LedgerKeys) do LedgerKeys[k] = nil end
-        for k in pairs(Pending) do Pending[k] = nil end
+        for _, e in ipairs(keep) do Ledger[#Ledger + 1] = e; LedgerKeys[ekey(e.kind, e.path, e.fn, e.args)] = true end
+        for k, e in pairs(Pending) do if (e.at or -1) < cut then Pending[k] = nil end end
         CP_MAX, CP_FIX, LOCAL_CP_SEEN = 0, nil, false
         P.RaiseDoor.state, P.RaiseDoor.remote = {}, {}
         Inv1.team, Inv1.last, Inv1.addr = {}, nil, nil       -- (the code door's "Security" key came back)
-        RH.room, RH.applied = 0, true                         -- (and Chapter 2's right hand type)
+        if (RH.room_at or -1) < cut then RH.room, RH.applied = 0, true end   -- (and Chapter 2's right hand type)
         P.ReplayHold, P.HeldReplays = nil, {}
         P.Pad.done = {}
         for _, f in ipairs(P.NewGameReset) do pcall(f) end    -- other modules' remembered state (coop_extra)
@@ -2391,11 +2527,19 @@ P.new_game_check = function(cp)
 end
 -- (the spawn at checkpoint 0 can come BEFORE this world change: then there is nothing left to hold)
 table.insert(P.Handlers.unload, function()
+    P.UnloadAt = P.game_time()                                -- 1.7.7: see new_game_check
     if P.NewGameAt and P.game_time() - P.NewGameAt < 20 then return end
     P.ReplayHold = P.game_time() + P.REPLAY_HOLD; P.HeldReplays = {}
 end)
 table.insert(P.Handlers.tick, function()
     if P.ReplayHold and P.game_time() >= P.ReplayHold then P.release_replays() end
+    -- 1.7.7: remember where we stand (once a second) - levels stood in during the last minute are never released
+    local gt = P.game_time()
+    -- (never around a level change: the floor we stand on may be in a level being unloaded - reading it then
+    -- touched freed memory)
+    if P.CHAPTER == 2 and gt - (P.FloorAt or -10) >= 2 and not P.quiet() and not Game.loading and not Game.dead
+        and gt - (P.UnloadAt or -100) > 5 and gt - (P.LevelsChangedAt or -100) > 5 and not P.VolNeedScan
+        and gt - (P.SpawnAt or -100) > 5 and Game.pawn ~= nil then P.FloorAt = P.game_time(); if P.crumb then P.crumb("floor tick") end; pcall(floor_pkg) end
 end)
 
 -- the friend's catch-up batch (see P.Fresh)
@@ -2403,7 +2547,9 @@ Coop.on("lbeg", function(from) P.Fresh.batch[from] = true end)
 Coop.on("lend", function(from) P.Fresh.batch[from] = nil end)
 P.start_new_game = function()
     P.Fresh.untilT = os.clock() + P.Fresh.SECS
+    P.UnloadAt = math.huge                      -- 1.7.7: New Game pressed: forget everything (see new_game_check)
     P.new_game_check(0)
+    P.UnloadAt = P.game_time()
     log("New Game pressed: starting from the beginning (friends' old progress ignored for %d s)", P.Fresh.SECS)
 end
 -- Chapter 1 main menu: hook its New Game button. The menu widget only exists in the menu, so look for it once
@@ -2702,9 +2848,17 @@ table.insert(P.Handlers.tick, function(dt, have)
     local now = P.game_time()
     if now - T.at < T.EVERY then return end
     T.at = now
-    for _, a in ipairs(try(FindAllOf, T.CLASS) or {}) do
-        local path = valid(a) and actor_path(a)
-        if path then
+    -- 1.7.7: the pads are found by one FindAllOf every 30 s / level change (it was every 0.5 s: 4-5 ms each);
+    -- in between they are looked up by path
+    if not T.paths or T.paths_gen ~= (P.LevelGen or 0) or now - (T.paths_at or -100) > 30 then
+        T.paths, T.paths_gen, T.paths_at = {}, P.LevelGen or 0, now
+        for _, a in ipairs(try(FindAllOf, T.CLASS) or {}) do
+            local pth = valid(a) and actor_path(a); if pth then T.paths[#T.paths + 1] = pth end
+        end
+    end
+    for _, path in ipairs(T.paths) do
+        local a = find_actor(path)
+        if a then
             local done = try(function() return a["HandpadCompleted?"] end) == true
             if done and not T.seen[path] and not T.remote[path] and not T.team[path] and Coop.active() then
                 T.team[path] = true
@@ -2718,7 +2872,7 @@ table.insert(P.Handlers.tick, function(dt, have)
     end
 end)
 -- a reloaded pad starts open again: its new copy may need completing again (remote cleared), its state re-read
-function P.TwoHand.reset() P.TwoHand.seen, P.TwoHand.remote = {}, {} end
+function P.TwoHand.reset() P.TwoHand.seen, P.TwoHand.remote, P.TwoHand.paths = {}, {}, nil end
 table.insert(P.Handlers.unload, P.TwoHand.reset)
 table.insert(P.Handlers.restart, P.TwoHand.reset)
 table.insert(P.NewGameReset, function() P.TwoHand.team = {}; P.TwoHand.reset() end)

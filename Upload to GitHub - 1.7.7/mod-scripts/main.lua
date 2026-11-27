@@ -12,7 +12,7 @@
   Console (F10):  coop_status | coop_host [name] | coop_join <ip[:port]> [name] | coop_off
 ]]
 
-local VERSION = "1.7.6"   -- 1.7.5: Chapter 5 world sync (MushyMeow: levers, valves, scanners, doors, story progress), friend figures + colours in CH3-5, call param-count check, census speed-up; 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
+local VERSION = "1.7.7"   -- 1.7.7: CH2 freezes (hooks spread, fewer), levers, button presses, catch-up kept at start, out-of-bounds, broken settings save, light repair; 1.7.5: Chapter 5 world sync (MushyMeow: levers, valves, scanners, doors, story progress), friend figures + colours in CH3-5, call param-count check, census speed-up; 1.7.4: CH1 tapes + VHS players shared, two-hand scanners, settings check with friends, start banner, F6 debounce; 1.7.3: CH1 power puzzles live only (teleport back), MAF levers pulled, hallway+storage loaded for friends, bg_levels off in CH1; 1.7.2: launcher update list, friends invite + direct join; 1.7.1: CH1 area loading shared again, Huggy chase start local, load-time level events not shared (teleports), breakers (blue + inventory), pickups verified; 1.7.0: CH1 MAF tubes, no door-close/streaming sharing, spawned pickups, team hands, flashlight key F, local host auto-join, crouch figure, world-reload crash; 1.6.9: CH1 Load Game -> team checkpoint, breaker colours, Huggy key + pickups gone for all (also speedrun), MAF vent door; CH2 hook crash fix; 1.6.8: CH1 Storage breakers synced (layout + pickups), GrabPack box not synced; 1.6.7: CH1 crash at the Steam Hallway (Storage loading): level slots by path, assets re-found; 1.6.6: CH1 power room short circuit + power puzzle sync, stale part crash; 1.6.5: CH1 crash on area streaming, scanner sync with power, New Game resets poses, CH2 furnace doors; 1.6.4: crash fixes on level changes, CH1 hand scanners live, code door, New Game; 1.5.6: Chapter 1 speedrun mode, shared checkpoints (Load Game -> furthest), keys and doors fixed; 1.5.5: merge of 1.5.0 (ch3-5 experimental, several games per PC) with chat menu/text boxes/solid friends/commands; 1.4.9: status key F11 (F10 is the console); 1.4.8: level-script lever sync, checkpoint follow, census perf, CH2 hand pose; 1.4.1: scan performance; 1.4.0: Launcher 3, CH2 props/minigames; 1.3.5: Chapter 1 pose/puzzle sync, crash fixes for streamed-out levels
 local UEHelpers = require("UEHelpers")
 
 -- Crash fix (2026-11-16): UE4SS's UEHelpers caches the PlayerController across level loads and then calls
@@ -503,6 +503,7 @@ end
 -- One synchronous round trip with the helper. state_line may be nil.
 local function net_poll(state_line)
     if not Net.connected then return end
+    local p0 = os.clock()
     local ok, err = pcall(function()
         if state_line then Net.up:write("S ", state_line, "\n") end
         for _, l in ipairs(Net.pack_outbox()) do Net.up:write(l, "\n") end
@@ -515,6 +516,11 @@ local function net_poll(state_line)
             on_line(line)
         end
     end)
+    do   -- 1.7.7: a stalled helper blocks the game thread - make it visible
+        local pd, P0 = os.clock() - p0, _G.PoppyCoop
+        if P0 and P0.Perf and P0.Perf.sec then P0.Perf.sec.net = (P0.Perf.sec.net or 0) + pd end
+        if pd > 0.015 then log("slow: net poll %.1f ms", pd * 1000) end
+    end
     if not ok then
         log("helper link lost: %s", tostring(err))
         local P2 = _G.PoppyCoop
@@ -575,6 +581,14 @@ local SenderCaps = {}
 -- players see the hand shoot out on a cable. Found once (then every few seconds), owner-checked,
 -- and switched off for the session after any engine error (errors leak Lua C stack).
 local HandScan = { at = -100, list = {}, off = false, logged = false }
+-- 1.7.7: never IsValid() a kept hand (an area streaming out frees it: crash in UE4SS IsValid) - find it again
+-- by path and check the address
+HandScan.alive = function(e)
+    local o = e.path and try(StaticFindObject, e.path)
+    if not (o and valid(o)) or try(function() return o:GetAddress() end) ~= e.addr then return false end
+    e.a = o
+    return true
+end
 local function owned_by(a, pawn_addr)
     local o = a
     for _ = 1, 4 do
@@ -595,8 +609,10 @@ local function scan_hands(pawn)
         if valid(h) then
             local slot = try(function() return h.HandSlot end)
             if type(slot) == "number" and (slot == 0 or slot == 1) then
-                if pa and owned_by(h, pa) then mine[#mine + 1] = { a = h, slot = slot }
-                else other[#other + 1] = { a = h, slot = slot } end
+                -- 1.7.7: path + address kept, the hand is looked up fresh before each use (HandScan.alive)
+                local e = { a = h, slot = slot, addr = try(function() return h:GetAddress() end),
+                            path = try(function() return h:GetFullName():match("^%S+ (.+)$") end) }
+                if pa and owned_by(h, pa) then mine[#mine + 1] = e else other[#other + 1] = e end
             end
         end
     end
@@ -707,7 +723,7 @@ local function hand_pose_job()
     local pose = {}
     for _, e in ipairs(HandScan.list or {}) do
         local ok, v = pcall(function()
-            if not e.a:IsValid() then return nil end
+            if not HandScan.alive(e) then return nil end
             local par = e.a:GetAttachParentActor()
             local name = par and par:IsValid() and par:GetFName():ToString() or ""
             if name:find("Gun", 1, true) then return nil end            -- resting on its launcher
@@ -738,7 +754,8 @@ local function hand_tokens(pawn, loc)
     if HandScan.off then return "" end
     -- both hands found (they live as long as the pawn): look again only every 30 s; FindAllOf walks every
     -- engine object (~12 ms) and ran every 3 s
-    if game_time - HandScan.at > ((#HandScan.list >= 2 and HandScan.owned) and 30 or 3) then scan_hands(pawn) end
+    -- 1.7.7: CH1 never reports hand ownership ("0 owned"), so this FindAllOf (~12 ms) ran every 3 s all session
+    if game_time - HandScan.at > ((#HandScan.list >= 2 and (HandScan.owned or CHAPTER == 1)) and 30 or 3) then scan_hands(pawn) end
     if HandScan.want and not HandScan.job then        -- bone + grab state of the real hands: read late
         HandScan.job = true
         late(function() hand_pose_job() end, "hand_pose")
@@ -747,7 +764,7 @@ local function hand_tokens(pawn, loc)
     local best = {}
     local ok, err = pcall(function()
         for _, e in ipairs(HandScan.list) do
-            if e.a:IsValid() then
+            if HandScan.alive(e) then
                 local hl = e.a:K2_GetActorLocation()
                 local dx, dy, dz = hl.X - loc.X, hl.Y - loc.Y, hl.Z - loc.Z
                 local d2 = dx * dx + dy * dy + dz * dz
@@ -1178,8 +1195,13 @@ end
 
 local function f2_tint(rgb)
     local world = UEHelpers.GetWorld()
-    local m = try(function() return F2A.kml:CreateDynamicMaterialInstance(world, F2A.paint, FName("None"), 0) end)
-    if not valid(m) then return F2A.paint end
+    -- 1.7.7: parent and library looked up by path - a cached material can be freed by the engine's GC, and
+    -- handing a freed material to SetMaterial crashed the game (crash reports 1.6.5-1.7.6, EXE+0x2d25177)
+    local parent = try(StaticFindObject, F2.paint)
+    local kml = try(StaticFindObject, "/Script/Engine.Default__KismetMaterialLibrary")
+    if not (valid(parent) and valid(kml)) then return nil end
+    local m = try(function() return kml:CreateDynamicMaterialInstance(world, parent, FName("None"), 0) end)
+    if not valid(m) then return parent end
     pcall(function() m:SetVectorParameterValue(FName("Tint"), { R = rgb[1], G = rgb[2], B = rgb[3], A = 1.0 }) end)
     return m
 end
@@ -1235,8 +1257,8 @@ local function f2_build(st)
                 local c = a.StaticMeshComponent
                 c:SetMobility(2)
                 c:SetStaticMesh(d.key == "backpack" and F2A.backpack or F2A.gun)
-                local mat = d.key == "backpack" and F2A.bpmat or F2A.gunmat
-                for i = 0, c:GetNumMaterials() - 1 do c:SetMaterial(i, mat) end
+                local mat = try(StaticFindObject, d.key == "backpack" and F2.bpmat or F2.gunmat)   -- 1.7.7: by path
+                if valid(mat) then for i = 0, c:GetNumMaterials() - 1 do c:SetMaterial(i, mat) end end
                 c:SetCollisionEnabled(0)
             end)
             f2_attach(a, bc, d.sock, d.L, d.R, d.S)
@@ -1361,7 +1383,8 @@ function Cab.cable(p, tag, path, elec)
             local c = cab.StaticMeshComponent
             c:SetMobility(2)
             c:SetStaticMesh(F2A.cable)
-            c:SetMaterial(0, f.cablemat or f2_tint(TARGET_RGB.black))
+            local m0 = f2_tint(TARGET_RGB.black)          -- 1.7.7: every segment its own material
+            if m0 then c:SetMaterial(0, m0) end
             c:SetCollisionEnabled(0)
             c:SetCastShadow(false)
         end)
@@ -1374,10 +1397,23 @@ function Cab.cable(p, tag, path, elec)
     elec = elec and true or false
     if f["elec" .. tag] ~= elec then
         f["elec" .. tag] = elec
-        if elec and not f.cable_on then f.cable_on = f2_tint({ 0.6, 4.0, 0.5 }) end
-        if not f.cable_off then f.cable_off = f2_tint(TARGET_RGB.black) end
-        local m = elec and f.cable_on or f.cable_off
-        for _, a in ipairs(segs) do if valid(a) then pcall(function() a.StaticMeshComponent:SetMaterial(0, m) end) end end
+        -- 1.7.7: recolour each segment's OWN material (kept alive by its component). Swapping two cached
+        -- materials let the unused one be freed by the GC, and the next swap passed a freed material to
+        -- SetMaterial - the crash at EXE+0x2d25177 / +0x2a281ab (1.6.5-1.7.6, often when power toggled)
+        local rgb = elec and { 0.6, 4.0, 0.5 } or TARGET_RGB.black
+        local col = { R = rgb[1], G = rgb[2], B = rgb[3], A = 1.0 }
+        for _, a in ipairs(segs) do
+            if valid(a) then pcall(function()
+                local c = a.StaticMeshComponent
+                local m = c:GetMaterial(0)
+                if valid(m) and m:GetClass():GetFName():ToString() == "MaterialInstanceDynamic" then
+                    m:SetVectorParameterValue(FName("Tint"), col)
+                else
+                    local nm = f2_tint(rgb)
+                    if nm then c:SetMaterial(0, nm) end
+                end
+            end) end
+        end
     end
     for i, a in ipairs(segs) do
         if valid(a) then
@@ -1453,6 +1489,7 @@ function Cab.boost(p, st, c, crouch, dead)
             local a = p.f2[k]
             if valid(a) and not p.f2[k .. "_parked"] then
                 p.f2[k .. "_parked"] = true
+                pcall(function() a:SetActorEnableCollision(false) end)   -- 1.7.7: no invisible floor 50 m down
                 pcall(function() a:K2_SetActorLocation({ X = c.x, Y = c.y, Z = c.z - 5000 }, false, {}, true) end)
             end
         end
@@ -1482,6 +1519,12 @@ function Cab.boost(p, st, c, crouch, dead)
     end
     if not valid(f.boost) then return end
     local off = dead or (p.air or 0) > 0.5
+    -- 1.7.7: parked blocks lose their collision (CH2 is stacked: slide, train, chase - a parked block 50 m below
+    -- the friend was an invisible floor/wall for a player down there)
+    if f.boost_coll ~= (not off) then
+        f.boost_coll = not off
+        pcall(function() f.boost:SetActorEnableCollision(not off) end)
+    end
     pcall(function()
         f.boost:K2_SetActorLocation({ X = c.x, Y = c.y, Z = off and (c.z - 5000) or (c.z + (crouch and 30 or 92)) }, false, {}, true)
     end)
@@ -1518,6 +1561,10 @@ function Cab.solid(p, c, crouch, dead)
     end
     -- bottom 2 cm above the feet (c is the capsule centre, 88 above the feet standing, ~55 crouched)
     local feet = c.z - (crouch and 55 or 88)
+    if f.solid_coll ~= (not dead) then
+        f.solid_coll = not dead
+        pcall(function() f.solid:SetActorEnableCollision(not dead) end)
+    end
     pcall(function()
         f.solid:K2_SetActorLocation({ X = c.x, Y = c.y, Z = dead and (c.z - 5000) or (feet + 2 + h * 50) }, false, {}, true)
     end)
@@ -1622,7 +1669,8 @@ local function f2_update(p, st, c, dt, crouch, dead)
     local green = (st.flags & 32) ~= 0
     if green ~= f.green then
         f.green = green
-        local m = f.matR
+        -- 1.7.7: the material the hand really holds (a kept reference could be freed)
+        local m = valid(f.handR) and try(function() return f.handR.SkeletalMeshComponent:GetMaterial(0) end)
         if valid(m) then
             local rgb = green and F2_COL.G or F2_COL.R
             pcall(function() m:SetVectorParameterValue(FName("Tint"), { R = rgb[1], G = rgb[2], B = rgb[3], A = 1.0 }) end)
@@ -2102,7 +2150,9 @@ local function update_puppets(dt)
         end
     end
     for id, pl in pairs(Net.players) do
-        local st = pl.state and parse_state(pl.state)
+        -- 1.7.7: parsed once per incoming state (20 Hz), not every frame
+        if pl.state ~= pl.ps_src then pl.ps_src, pl.ps = pl.state, pl.state and parse_state(pl.state) end
+        local st = pl.ps
         local p = Puppets[id]
         if st and st.map == Game.map and Game.pawn then
             if p and not part(p, p.f2 and 1 or 3) then destroy_puppet(id); p = nil end   -- world reloaded
@@ -2517,7 +2567,7 @@ end
 local TpReq = false        -- true, or a player name (console: coop_tp <name>)
 local TpLast = nil
 local Tp = nil            -- running teleport: { id, name, phase = "load"|"guard", t0, t1, z, tries }
-local TP_LOAD_WAIT = 10   -- s: longest wait for the friend's area to load before teleporting anyway
+local TP_LOAD_WAIT = 15   -- s (1.7.7: 10 -> 15, waits for floor too): longest wait for the friend's area to load before teleporting anyway
 local TP_GUARD = 5        -- s: after the teleport, watch for a fall through a missing floor
 local TP_FALL = 600       -- cm below the friend = falling out of the map
 -- Following a player who is at a later checkpoint (Chapter 2): the game respawns us at their checkpoint
@@ -2539,10 +2589,29 @@ local function tp_target(id)
     if st and st.map == Game.map and (st.flags & 16) == 0 then return st, pl end
 end
 
+-- 1.7.7: is there floor under (x, y) near height z? (line trace straight down)
+function Game.tp_floor(x, y, z)
+    local pawn = Game.pawn
+    local ksl = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    if not (valid(pawn) and ksl) then return false end
+    local hit = {}
+    local ok = try(function() return ksl:LineTraceSingle(pawn, { X = x, Y = y, Z = z + 60 }, { X = x, Y = y, Z = z - 300 },
+        0, false, { pawn }, 0, hit, true, { R = 1, G = 0, B = 0, A = 1 }, { R = 0, G = 1, B = 0, A = 1 }, 0) end)
+    return ok == true
+end
+-- next to the friend: behind them (their facing) if there is floor there - the old fixed spot (60 cm in world X)
+-- was often inside a wall or past a ledge; else on their own spot
 local function tp_place(st)
     local pawn = Game.pawn
     if not valid(pawn) then return end
-    pcall(function() pawn:K2_SetActorLocation({ X = st.x - 60, Y = st.y, Z = st.z + 30 }, false, {}, true) end)
+    local yr = math.rad(tonumber(st.yaw) or 0)
+    local x, y = st.x, st.y
+    for _, deg in ipairs({ 180, 90, 270, 0 }) do      -- behind, beside, in front: the first with floor
+        local r = yr + math.rad(deg)
+        local ax, ay = st.x + math.cos(r) * 80, st.y + math.sin(r) * 80
+        if Game.tp_floor(ax, ay, st.z) then x, y = ax, ay; break end
+    end
+    pcall(function() pawn:K2_SetActorLocation({ X = x, Y = y, Z = st.z + 30 }, false, {}, true) end)
     pcall(function() pawn.CharacterMovement.Velocity = { X = 0, Y = 0, Z = 0 } end)
 end
 
@@ -2581,9 +2650,10 @@ local function teleport_to_friend(want)
             Follow = nil
         end
     end
-    Tp = { id = pick, name = name, phase = "load", t0 = game_time, tries = 0 }
+    Tp = { id = pick, name = name, phase = "load", t0 = game_time, tries = 0,
+           from = try(function() return Game.pawn:K2_GetActorLocation() end) }
     tp_say("Loading " .. name .. "'s area...")
-    do local P0 = _G.PoppyCoop; if P0 and P0.hush then P0.hush(8) end end   -- areas change now: hooks stay quiet (P.Quiet)
+    do local P0 = _G.PoppyCoop; if P0 and P0.hush then P0.hush(CHAPTER == 1 and 8 or 3) end end   -- 1.7.7: 8 -> 3 s (presses were lost)   -- areas change now: hooks stay quiet (P.Quiet)
 end
 
 local function follow_tick()
@@ -2617,6 +2687,20 @@ local function tp_tick()
             local ok, r, n, w = pcall(P2.level_prep, Tp.id)
             if ok then ready, pending, which = r, n, w else log("teleport: level_prep error %s", tostring(r)) end
         end
+        -- 1.7.7: no load pacing while teleporting (all of the friend's areas at once), and wait until there is
+        -- really floor next to the friend (top-level areas loaded is not enough: the floor can be in a sub-area)
+        if P2 and P2.LoadPace then P2.LoadPace.next_at, P2.LoadPace.quiet_until = 0, 0 end
+        if ready and game_time - (Tp.fl_at or 0) < 0.25 then return end   -- floor traces 4x a second, not every frame
+        Tp.fl_at = game_time
+        if ready then
+            local yr = math.rad(tonumber(st.yaw) or 0)
+            local floor = false
+            for _, a in ipairs({ 180, 90, 270, 0 }) do       -- behind, beside, in front (not ON the friend's own block)
+                local r = yr + math.rad(a)
+                if Game.tp_floor(st.x + math.cos(r) * 80, st.y + math.sin(r) * 80, st.z) then floor = true; break end
+            end
+            if not floor then ready, which = false, "floor" end
+        end
         if not ready and game_time - Tp.t0 < TP_LOAD_WAIT then return end
         if not ready then log("teleport: %d area(s) still loading, teleporting anyway: %s", pending, tostring(which)) end
         tp_place(st)
@@ -2631,6 +2715,16 @@ local function tp_tick()
         log("teleport: fell through (z %.0f vs %.0f), placing again (%d)", z, Tp.z, Tp.tries)
         tp_place(st)
         Tp.phase, Tp.t0 = "load", game_time - TP_LOAD_WAIT + 1.5   -- short re-check, then place again
+        return
+    end
+    -- 1.7.7: still falling after 3 tries: back to where the teleport started instead of falling out of the map
+    if z and z < Tp.z - TP_FALL and Tp.from then
+        local f = Tp.from
+        log("teleport: no floor at the friend - back to where you were")
+        tp_say("No floor at the friend yet - you were put back. Try F6 again in a moment.")
+        pcall(function() Game.pawn:K2_SetActorLocation({ X = f.X, Y = f.Y, Z = f.Z + 20 }, false, {}, true) end)
+        pcall(function() Game.pawn.CharacterMovement.Velocity = { X = 0, Y = 0, Z = 0 } end)
+        Tp = nil
         return
     end
     if game_time - Tp.t1 > TP_GUARD then Tp = nil end
@@ -2814,7 +2908,10 @@ function Ping.grab_tick()
                     if me then
                         local dx, dy, dz = c.x - me.X, c.y - me.Y, c.z - me.Z
                         local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-                        if d > 150 then
+                        -- 1.7.7: only a hand that was really shot out (away from us) and a friend not far above/below
+                        -- (a hand resting near a figure flung players over railings)
+                        local hd = math.sqrt((hl.X - me.X) ^ 2 + (hl.Y - me.Y) ^ 2 + (hl.Z - me.Z) ^ 2)
+                        if d > 150 and hd > 250 and math.abs(dz) < 400 then
                             local sp = math.min(1400, 400 + d * 1.2)
                             pcall(function() pawn:LaunchCharacter({ X = dx / d * sp, Y = dy / d * sp, Z = dz / d * sp + 350 }, true, true) end)
                             Ping.grab_next = game_time + 1.5
@@ -3191,6 +3288,7 @@ end
 -- then, and assets cached here that nothing in the game references any more are freed. Forget them all now;
 -- they are looked up again by path when needed (touching a freed one crashed UE4SS - CH1 Storage, 1.6.x).
 Game.assets_changed = function()           -- (a field: main.lua is at Lua's 200-locals limit)
+    HandScan.list, HandScan.at = {}, -100       -- 1.7.7: hands of an area that changed: find them again
     for k in pairs(Assets) do Assets[k] = nil end
     for k in pairs(F2A) do F2A[k] = nil end
     for k in pairs(G1A) do G1A[k] = nil end
@@ -3235,7 +3333,7 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
     -- and repairs it the same way.
     local low = Config.low_gfx == true or Config.low_gfx == "true"
     local function exists(fn) local f = io.open(fn, "r"); if f then f:close(); return true end return false end
-    local mark, checked = MOD_DIR .. "\\low_gfx_applied.txt", MOD_DIR .. "\\gfx_checked.txt"
+    local mark, checked = MOD_DIR .. "\\low_gfx_applied.txt", MOD_DIR .. "\\gfx_checked2.txt"  -- 1.7.7: checked once more
     local marked = exists(mark)
     local check_old = not low and not marked and not exists(checked)
     if low or marked or check_old then
@@ -3244,8 +3342,9 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
             local ks = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
             if not (pc and ks) then return end
             if check_old then
-                local f = io.open(checked, "w"); if f then f:write("1"); f:close() end
                 local function sg(g) return tonumber(ks:GetConsoleVariableIntValue(("sg.%sQuality"):format(g))) or -1 end
+                if sg("Shadow") < 0 then return end   -- not readable yet: try again next start
+                local f = io.open(checked, "w"); if f then f:write("1"); f:close() end
                 local leftover = sg("Shadow") == 1 and sg("Effects") == 1 and sg("Foliage") == 1
                     and (sg("Texture") >= 2 or sg("ViewDistance") >= 2 or sg("Shading") >= 2)
                 if not leftover then return end
@@ -3272,10 +3371,26 @@ RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
                 local f = io.open(mark, "r")
                 if f then for g, v in (f:read("*a") or ""):gmatch("(%a+)=(%d+)") do saved[g] = tonumber(v) end; f:close() end
             end
-            for _, g in ipairs(GROUPS) do set(g, math.max(0, math.min(saved[g] or 3, 4))) end
+            -- 1.7.7: also through GameUserSettings - its own copy of the quality levels is what the game
+            -- re-applies (and saves again) later, so console values alone came back dark
+            local gus
+            pcall(function()
+                local cdo = StaticFindObject("/Script/Engine.Default__GameUserSettings")
+                if cdo and cdo:IsValid() then gus = cdo:GetGameUserSettings() end
+            end)
+            if not (gus and gus:IsValid()) then
+                gus = FindFirstOf("GameUserSettings")
+                if gus and (not gus:IsValid() or gus:GetFullName():find("Default__", 1, true)) then gus = nil end
+            end
+            local SETTER = { Shadow = "SetShadowQuality", Effects = "SetVisualEffectQuality",
+                             PostProcess = "SetPostProcessingQuality", Foliage = "SetFoliageQuality" }
+            for _, g in ipairs(GROUPS) do
+                local v = math.max(0, math.min(saved[g] or 3, 4))
+                set(g, v)
+                if gus then pcall(function() gus[SETTER[g]](gus, v) end) end
+            end
             ks:ExecuteConsoleCommand(pc:GetWorld(), "r.MotionBlurQuality 4", pc)
-            local gus = FindFirstOf("GameUserSettings")
-            if gus and gus:IsValid() and not gus:GetFullName():find("Default__", 1, true) then gus:SaveSettings() end
+            if gus then pcall(function() gus:ApplyNonResolutionSettings() end); pcall(function() gus:SaveSettings() end) end
             os.remove(mark)
             log("performance mode off: shadows/effects/post processing/foliage restored (%s)", next(saved) and "your own values" or "high")
         end)
@@ -3576,6 +3691,24 @@ end)
 ------------------------------------------------------------------------ init
 load_config()
 pcall(os.remove, Net.SET_FILE)        -- an offer from the last session is out of date
+-- 1.7.7: a settings save the game left empty (game killed while saving) breaks its options menu - nothing
+-- can be changed any more and brightness/graphics stay wrong. Move it aside; the game writes a new one.
+if CHAPTER == 2 then
+    pcall(function()
+        local d = (os.getenv("LOCALAPPDATA") or "") .. "\\Playtime_Prototype4\\Saved\\SaveGames\\"
+        for _, n in ipairs({ "SG_Graphics2.sav", "SG_Audio2.sav" }) do
+            local f = io.open(d .. n, "rb")
+            if f then
+                local head = f:read(4); f:close()
+                if head ~= "GVAS" then
+                    pcall(os.remove, d .. n .. ".broken")
+                    os.rename(d .. n, d .. n .. ".broken")
+                    log("game save %s was broken (empty) - moved aside, the game makes a new one", n)
+                end
+            end
+        end
+    end)
+end
 log("v%s loaded from %s | chapter %d%s | window %d | mode=%s name=%s host=%s:%d", VERSION, MOD_DIR, CHAPTER, EXPERIMENTAL and " (experimental)" or "", SLOT + 1, Config.mode, Config.name, Config.host_ip, Config.port)
 
 -- Expose for sibling modules (doors/puzzles etc. live in separate files)
